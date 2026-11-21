@@ -20,12 +20,37 @@ pub enum UiCmd {
         node: String,
     },
     TestAll,
-    /// 拉取托管订阅（url 空则用 settings.json 里保存的）
-    UpdateSub {
-        url: String,
+    /// 测单个节点延迟
+    TestNode { name: String },
+    /// 拉取某条订阅（id 空则更新当前活动订阅）
+    UpdateSub { id: String },
+    /// 添加订阅（下载校验通过后由 worker 登记）
+    AddSub { name: String, url: String },
+    /// 删除某条订阅（连同其内容文件）
+    RemoveSub { id: String },
+    /// 切换活动订阅（内核在跑则热重载，否则物化 profile 供下次启动）
+    SwitchSub { id: String },
+    /// 下载线程 → worker：订阅内容已下载并校验，由 worker 统一落盘/改 settings。
+    /// id 为 None 表示新增订阅（此时 name/url 必有）；Ok 携带 profile 文本。
+    SubFetched {
+        id: Option<String>,
+        name: Option<String>,
+        url: Option<String>,
+        result: Result<String, String>,
     },
-    /// 下载线程 → worker：订阅落盘结果（Ok = proxy 数）
-    UpdateSubDone(Result<usize, String>),
+}
+
+/// 订阅列表的展示条目（settings.json 的 SubMeta 的前端视图，camelCase）
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubStatus {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub active: bool,
+    pub node_count: Option<usize>,
+    /// 最近一次更新成功的 unix 秒
+    pub updated_at: Option<u64>,
 }
 
 /// worker -> UI 的可见结果（经 Tauri 事件/命令序列化给前端，camelCase）
@@ -41,6 +66,12 @@ pub struct Snapshot {
     pub tun_enabled: bool,
     /// 节点/组的展示模型（顺序来自订阅，见 proxy_view）
     pub view: crate::backend::proxy_view::ProxyView,
+    /// 全部订阅（settings.json 的前端视图）
+    pub subs: Vec<SubStatus>,
+    /// 单点测速进行中的节点名
+    pub testing: Vec<String>,
+    /// 「测全部」进行中（UI 据此灰掉测速按钮）
+    pub test_all_running: bool,
     pub message: String,
     pub failed_delays: Vec<String>,
 }
@@ -68,12 +99,34 @@ pub fn spawn_worker(
         // 找不到内核时不显示授权按钮；缺内核的提示在点「启动内核」时给出。
         let cap_missing = crate::backend::runtime::find_mihomo()
             .is_ok_and(|binary| !crate::backend::runtime::has_cap_net_admin(&binary));
-        let systemd_available = crate::backend::runtime::systemd_available();
-        set_snap(&snapshot, |snap| {
-            snap.cap_missing = cap_missing;
-            snap.systemd_available = systemd_available;
-        });
-        link.poll(&cfg, &snapshot, &mut delay_cancel);
+            let systemd_available = crate::backend::runtime::systemd_available();
+            set_snap(&snapshot, |snap| {
+                snap.cap_missing = cap_missing;
+                snap.systemd_available = systemd_available;
+            });
+            // 订阅登记：读 settings.json（旧版单订阅自动迁移成一条订阅）；
+            // 活动订阅的内容还没物化成 profile.yaml 就补上，保证接下来启动的内核用得上。
+            let mut settings = {
+                let raw = crate::backend::subscription::load_settings(&cfg.workdir);
+                let migrated =
+                    crate::backend::subscription::migrate_legacy(raw.clone(), &cfg.workdir);
+                if migrated != raw
+                    && let Err(e) =
+                        crate::backend::subscription::save_settings(&cfg.workdir, &migrated)
+                {
+                    eprintln!("保存迁移后的订阅设置失败: {e}");
+                }
+                migrated
+            };
+            if let Some(active) = settings.active.clone()
+                && let Some(text) =
+                    crate::backend::subscription::load_sub_profile(&cfg.workdir, &active)
+                && !cfg.profile_path.is_file()
+            {
+                let _ = std::fs::write(&cfg.profile_path, &text);
+            }
+            set_snap(&snapshot, |snap| snap.subs = sub_status_list(&settings));
+            link.poll(&cfg, &snapshot, &mut delay_cancel);
         // 按当前订阅刷新 config.yaml，让接下来启动的内核用上最新订阅。
         if cfg.profile_path.is_file()
             && let Err(e) = crate::backend::runtime::write_config(&cfg)
@@ -189,49 +242,153 @@ pub fn spawn_worker(
                         }
                     }
                 }
-                UiCmd::UpdateSubDone(Ok(count)) => {
+                UiCmd::SubFetched {
+                    id,
+                    name,
+                    url,
+                    result,
+                } => {
                     updating_sub.store(false, Ordering::Release);
-                    if let Some(c) = &core {
-                        match reload_core(c, &cfg) {
-                            Ok(view) => set_snap(&snapshot, |snap| {
-                                snap.view = view;
-                                snap.failed_delays.clear();
-                                snap.message = format!("订阅已更新，{count} 个节点已重载");
-                            }),
-                            Err(e) => set_snap(&snapshot, |snap| {
-                                snap.message = format!("订阅已下载，但重载失败: {e}");
-                            }),
-                        }
-                    } else {
-                        let staged = cfg
-                            .workdir
-                            .join(crate::backend::subscription::PROFILE_STAGED);
-                        let committed = crate::backend::subscription::atomic_replace(
-                            &staged,
-                            &cfg.profile_path,
-                        )
-                        .and_then(|()| crate::backend::runtime::write_config(&cfg));
-                        set_snap(&snapshot, |snap| {
-                            snap.message = match committed {
-                                Ok(()) => format!("订阅已更新，{count} 个节点；启动内核后生效"),
-                                Err(e) => format!("订阅已下载，但保存失败: {e:#}"),
+                    let adding = id.is_none();
+                    match result {
+                        Ok(text) => {
+                            let outcome = apply_fetched_sub(
+                                &mut settings,
+                                &cfg.workdir,
+                                id.as_deref(),
+                                name.as_deref(),
+                                url.as_deref(),
+                                &text,
+                            );
+                            let (count, activate) = match outcome {
+                                Ok(pair) => pair,
+                                Err(e) => {
+                                    let prefix = if adding { "订阅添加失败" } else { "订阅更新失败" };
+                                    set_snap(&snapshot, |snap| {
+                                        snap.message = format!("{prefix}: {e:#}")
+                                    });
+                                    continue;
+                                }
                             };
-                        });
+                            // 活动订阅的内容变了：内核在跑 → 热重载；否则物化 profile + 重写 config
+                            let mut view = None;
+                            let mut committed = Ok(());
+                            if activate {
+                                match activate_profile_text(core.as_ref(), &cfg, &text) {
+                                    Ok(v) => view = v,
+                                    Err(e) => committed = Err(e),
+                                }
+                            }
+                            set_snap(&snapshot, |snap| {
+                                snap.subs = sub_status_list(&settings);
+                                if let Some(v) = view {
+                                    snap.view = v;
+                                    snap.failed_delays.clear();
+                                }
+                                let prefix = if adding { "订阅已添加" } else { "订阅已更新" };
+                                snap.message = match (&committed, activate, core.is_some()) {
+                                    (Err(e), _, _) => format!("{prefix}，但重载失败: {e:#}"),
+                                    (_, false, _) => prefix.into(),
+                                    (_, true, true) => format!("{prefix}，{count} 个节点已重载"),
+                                    (_, true, false) => {
+                                        format!("{prefix}，{count} 个节点；启动内核后生效")
+                                    }
+                                };
+                            });
+                        }
+                        Err(e) => set_snap(&snapshot, |snap| {
+                            let prefix = if adding { "订阅添加失败" } else { "订阅更新失败" };
+                            snap.message = format!("{prefix}: {e}");
+                        }),
                     }
                 }
-                UiCmd::UpdateSubDone(Err(e)) => {
-                    updating_sub.store(false, Ordering::Release);
-                    set_snap(&snapshot, |snap| {
-                        snap.message = format!("订阅更新失败: {e}");
-                    });
-                }
-                UiCmd::UpdateSub { url } => {
+                UiCmd::UpdateSub { id } => {
+                    let sub_id = if id.trim().is_empty() {
+                        settings.active.clone()
+                    } else {
+                        Some(id)
+                    };
+                    let Some(sub_id) = sub_id else {
+                        set_snap(&snapshot, |snap| snap.message = "还没有订阅，请先添加".into());
+                        continue;
+                    };
+                    let Some(meta) = settings.subscriptions.iter().find(|s| s.id == sub_id) else {
+                        set_snap(&snapshot, |snap| snap.message = "订阅不存在".into());
+                        continue;
+                    };
+                    let url = meta.url.clone();
                     if updating_sub.swap(true, Ordering::Relaxed) {
                         set_snap(&snapshot, |snap| snap.message = "订阅更新已在进行".into());
                         continue;
                     }
                     set_snap(&snapshot, |snap| snap.message = "正在下载订阅…".into());
-                    launch_subscription_update(tx.clone(), cfg.workdir.clone(), url);
+                    launch_sub_fetch(tx.clone(), Some(sub_id), None, url);
+                }
+                UiCmd::AddSub { name, url } => {
+                    if updating_sub.swap(true, Ordering::Relaxed) {
+                        set_snap(&snapshot, |snap| snap.message = "订阅更新已在进行".into());
+                        continue;
+                    }
+                    set_snap(&snapshot, |snap| snap.message = "正在添加订阅…".into());
+                    launch_sub_fetch(tx.clone(), None, Some(name), url);
+                }
+                UiCmd::RemoveSub { id } => {
+                    if !crate::backend::subscription::valid_id(&id) {
+                        set_snap(&snapshot, |snap| snap.message = "无效的订阅标识".into());
+                        continue;
+                    }
+                    crate::backend::subscription::remove_sub_profile(&cfg.workdir, &id);
+                    settings.subscriptions.retain(|s| s.id != id);
+                    if settings.active.as_deref() == Some(id.as_str()) {
+                        settings.active = None;
+                    }
+                    if let Err(e) = crate::backend::subscription::save_settings(&cfg.workdir, &settings) {
+                        eprintln!("保存订阅设置失败: {e}");
+                    }
+                    set_snap(&snapshot, |snap| {
+                        snap.subs = sub_status_list(&settings);
+                        snap.message = "订阅已删除".into();
+                    });
+                }
+                UiCmd::SwitchSub { id } => {
+                    let meta = settings.subscriptions.iter().find(|s| s.id == id).map(|s| s.name.clone());
+                    let Some(name) = meta else {
+                        set_snap(&snapshot, |snap| snap.message = "订阅不存在".into());
+                        continue;
+                    };
+                    if settings.active.as_deref() == Some(id.as_str()) {
+                        set_snap(&snapshot, |snap| snap.message = "已是当前订阅".into());
+                        continue;
+                    }
+                    let Some(text) =
+                        crate::backend::subscription::load_sub_profile(&cfg.workdir, &id)
+                    else {
+                        set_snap(&snapshot, |snap| {
+                            snap.message = "该订阅还没有内容，请先更新再切换".into();
+                        });
+                        continue;
+                    };
+                    match activate_profile_text(core.as_ref(), &cfg, &text) {
+                        Ok(view) => {
+                            settings.active = Some(id.clone());
+                            if let Err(e) =
+                                crate::backend::subscription::save_settings(&cfg.workdir, &settings)
+                            {
+                                eprintln!("保存订阅设置失败: {e}");
+                            }
+                            set_snap(&snapshot, |snap| {
+                                snap.subs = sub_status_list(&settings);
+                                if let Some(v) = view {
+                                    snap.view = v;
+                                    snap.failed_delays.clear();
+                                }
+                                snap.message = format!("已切换到「{name}」");
+                            });
+                        }
+                        Err(e) => set_snap(&snapshot, |snap| {
+                            snap.message = format!("切换失败: {e:#}");
+                        }),
+                    }
                 }
                 UiCmd::TestAll => {
                     if let Some(c) = &core {
@@ -249,11 +406,16 @@ pub fn spawn_worker(
                             .collect();
                         let cancel = Arc::new(AtomicBool::new(false));
                         delay_cancel = Some(cancel.clone());
-                        set_snap(&snapshot, |snap| {
-                            snap.message = "测延迟中…".into();
-                            snap.failed_delays.clear();
-                        });
-                        launch_delay_test(
+        set_snap(&snapshot, |snap| {
+            snap.message = "测延迟中…".into();
+            snap.failed_delays.clear();
+            snap.test_all_running = true;
+            // 点击测全部即清空旧延迟：测试期间未出结果的节点显示「未测」
+            for node in &mut snap.view.nodes {
+                node.delay = None;
+            }
+        });
+        launch_delay_test(
                             c.clone(),
                             snapshot.clone(),
                             names,
@@ -266,6 +428,23 @@ pub fn spawn_worker(
                         });
                     }
                 }
+                UiCmd::TestNode { name } => {
+                    if let Some(c) = &core {
+                        if snapshot.read().unwrap().testing.contains(&name) {
+                            set_snap(&snapshot, |snap| {
+                                snap.message = "该节点测延迟已在进行".into();
+                            });
+                            continue;
+                        }
+                        set_snap(&snapshot, |snap| {
+                            snap.testing.push(name.clone());
+                            snap.message = "测延迟中…".into();
+                        });
+                        launch_delay_test_single(c.clone(), snapshot.clone(), name);
+                    } else {
+                        set_snap(&snapshot, |snap| snap.message = NOT_RUNNING.into());
+                    }
+                }
             }
         }
     })
@@ -273,6 +452,23 @@ pub fn spawn_worker(
 
 fn delay_summary(succeeded: usize, failed: usize) -> String {
     format!("测速完成：成功 {succeeded} 个，失败 {failed} 个")
+}
+
+/// 测速完成后回拉一次 /proxies 同步各组的 now：
+/// url-test 组在内核里按成员实时延迟动态选最小，个别节点测完它的选择就可能变。
+fn refresh_group_now(
+    client: &crate::backend::mihomo_api::MihomoClient,
+    snapshot: &SharedSnapshot,
+) {
+    if let Ok(entries) = client.proxies() {
+        set_snap(snapshot, |snap| {
+            for group in &mut snap.view.groups {
+                if let Some(entry) = entries.iter().find(|e| e.name == group.name) {
+                    group.now = entry.now.clone();
+                }
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -327,7 +523,9 @@ fn launch_delay_test(
                     Err(_) => {
                         failed.fetch_add(1, Ordering::Relaxed);
                         set_snap(&snapshot, |snap| {
-                            snap.view.set_delay(&name, None);
+                            // 失败写入错误哨兵值：UI 分档显示「失败」（区别于未测），排序在超时后、未测前
+                            snap.view
+                                .set_delay(&name, Some(crate::backend::proxy_view::IMPLAUSIBLE_DELAY));
                             if !snap.is_failed(&name) {
                                 snap.failed_delays.push(name.clone());
                             }
@@ -338,6 +536,27 @@ fn launch_delay_test(
             if remaining_workers.fetch_sub(1, Ordering::AcqRel) == 1 {
                 running.store(false, Ordering::Release);
                 if !cancel.load(Ordering::Relaxed) {
+                    // url-test 组的 fastNode 只在组自身测试时按 tolerance 重算，
+                    // 外部单点测速不会触发；强制内核重测一遍，让它的选中跟上最新延迟。
+                    let urltest_groups: Vec<String> = snapshot
+                        .read()
+                        .unwrap()
+                        .view
+                        .groups
+                        .iter()
+                        .filter(|group| {
+                            group.kind.replace('-', "").eq_ignore_ascii_case("urltest")
+                        })
+                        .map(|group| group.name.clone())
+                        .collect();
+                    for name in &urltest_groups {
+                        let _ = client.group_delay(
+                            name,
+                            crate::backend::proxy_view::DEFAULT_TIMEOUT_MS,
+                            crate::backend::runtime::TEST_URL,
+                        );
+                    }
+                    refresh_group_now(&client, &snapshot);
                     set_snap(&snapshot, |snap| {
                         snap.message = delay_summary(
                             succeeded.load(Ordering::Relaxed),
@@ -345,55 +564,176 @@ fn launch_delay_test(
                         );
                     });
                 }
+                set_snap(&snapshot, |snap| snap.test_all_running = false);
             }
         });
     }
 }
 
-fn launch_subscription_update(
+/// 只做网络下载 + 校验；落盘/登记等所有状态变更留给 worker，避免并发写 settings.json。
+fn launch_sub_fetch(
     tx: std::sync::mpsc::Sender<UiCmd>,
-    data_dir: std::path::PathBuf,
+    id: Option<String>,
+    name: Option<String>,
     url: String,
 ) {
-    use anyhow::Context as _;
     std::thread::spawn(move || {
-        let result = (|| -> anyhow::Result<usize> {
-            let url = resolve_url(&url, &data_dir)?;
-            let staged_profile = data_dir.join(crate::backend::subscription::PROFILE_STAGED);
-            let text = crate::backend::subscription::stage_profile_file(&url, &staged_profile)?;
-
-            // 保存 URL 到 settings.json，供下次启动预填
-            let settings = crate::backend::subscription::Settings {
-                subscribe_url: url.clone(),
-            };
-            if let Err(e) = crate::backend::subscription::save_settings(&data_dir, &settings) {
-                eprintln!("保存设置失败: {e}");
-            }
-
-            // 数 proxy 数作为结果反馈（subscription 层已校验过非空）
-            let profile: serde_yaml::Value =
-                serde_yaml::from_str(&text).context("解析已落盘订阅失败")?;
-            let count = profile
-                .get("proxies")
-                .and_then(|v| v.as_sequence())
-                .map(|s| s.len())
-                .unwrap_or(0);
-            Ok(count)
-        })();
+        use anyhow::Context as _;
+        let result = (|| -> anyhow::Result<String> {
+            let text = crate::backend::subscription::fetch_subscribe(&url)?;
+            crate::backend::subscription::validate_profile_text(&text)
+                .context("校验订阅失败")?;
+            Ok(text)
+        })()
+        .map_err(|e| format!("{e:#}"));
         // 无论成败都回执 worker，由它统一收尾（更新 UI 状态 / 释放进行中标志）
-        let _ = tx.send(UiCmd::UpdateSubDone(result.map_err(|e| format!("{e:#}"))));
+        let _ = tx.send(UiCmd::SubFetched {
+            id,
+            name,
+            url: Some(url),
+            result,
+        });
     });
 }
 
-/// 空 url → settings.json 里保存的；都没有 → 报错
-fn resolve_url(url: &str, data_dir: &std::path::Path) -> anyhow::Result<String> {
-    let url = url.trim();
-    if !url.is_empty() {
-        return Ok(url.to_string());
+/// 单个节点的延迟测试；结果直接写回快照（含 testing 列表摘除）。
+fn launch_delay_test_single(
+    client: crate::backend::mihomo_api::MihomoClient,
+    snapshot: SharedSnapshot,
+    name: String,
+) {
+    std::thread::spawn(move || {
+        let result = client.delay(
+            &name,
+            crate::backend::proxy_view::DEFAULT_TIMEOUT_MS,
+            crate::backend::runtime::TEST_URL,
+        );
+        set_snap(&snapshot, |snap| {
+            snap.testing.retain(|testing| testing != &name);
+            match &result {
+                Ok(delay) => {
+                    snap.view.set_delay(&name, Some(delay.delay));
+                    snap.failed_delays.retain(|failed| failed != &name);
+                    snap.message = format!("{name}: {}ms", delay.delay);
+                }
+                Err(_) => {
+                    // 失败写入错误哨兵值：UI 分档显示「失败」（区别于未测）
+                    snap.view
+                        .set_delay(&name, Some(crate::backend::proxy_view::IMPLAUSIBLE_DELAY));
+                    if !snap.is_failed(&name) {
+                        snap.failed_delays.push(name.clone());
+                    }
+                    snap.message = format!("{name}: 测速失败");
+                }
+            }
+        });
+        refresh_group_now(&client, &snapshot);
+    });
+}
+
+/// settings 的订阅列表 → 快照展示条目（带 active 标记）。
+fn sub_status_list(settings: &crate::backend::subscription::Settings) -> Vec<SubStatus> {
+    settings
+        .subscriptions
+        .iter()
+        .map(|s| SubStatus {
+            id: s.id.clone(),
+            name: s.name.clone(),
+            url: s.url.clone(),
+            active: settings.active.as_deref() == Some(s.id.as_str()),
+            node_count: s.node_count,
+            updated_at: s.updated_at,
+        })
+        .collect()
+}
+
+/// 数 profile 文本里的节点数（校验已保证 proxies 非空）。
+fn count_proxies(text: &str) -> anyhow::Result<usize> {
+    use anyhow::Context as _;
+    let profile: serde_yaml::Value =
+        serde_yaml::from_str(text).context("解析订阅失败")?;
+    Ok(profile
+        .get("proxies")
+        .and_then(|v| v.as_sequence())
+        .map(|s| s.len())
+        .unwrap_or(0))
+}
+
+/// SubFetched(Ok) 的落盘与登记：写 subs/<id>.yaml、更新元数据、保存 settings。
+/// 返回 (节点数, 是否需要把该内容提交为活动 profile)：
+/// 新增时还没有活动订阅 → 是；更新当前活动订阅 → 是；其余否。
+fn apply_fetched_sub(
+    settings: &mut crate::backend::subscription::Settings,
+    data_dir: &std::path::Path,
+    id: Option<&str>,
+    name: Option<&str>,
+    url: Option<&str>,
+    text: &str,
+) -> anyhow::Result<(usize, bool)> {
+    let count = count_proxies(text)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let sub_id = match (id, name, url) {
+        (None, Some(name), Some(url)) => {
+            let id = crate::backend::subscription::new_sub_id();
+            settings
+                .subscriptions
+                .push(crate::backend::subscription::SubMeta {
+                    id: id.clone(),
+                    name: name.to_string(),
+                    url: url.to_string(),
+                    node_count: Some(count),
+                    updated_at: Some(now),
+                });
+            id
+        }
+        (Some(id), _, _) => {
+            anyhow::ensure!(
+                settings.subscriptions.iter().any(|m| m.id == id),
+                "订阅 {id} 不存在"
+            );
+            let meta = settings
+                .subscriptions
+                .iter_mut()
+                .find(|m| m.id == id)
+                .expect("上面已确认存在");
+            meta.node_count = Some(count);
+            meta.updated_at = Some(now);
+            id.to_string()
+        }
+        _ => anyhow::bail!("新增订阅缺少 name/url"),
+    };
+    crate::backend::subscription::save_sub_profile(data_dir, &sub_id, text)?;
+    if settings.active.is_none() && id.is_none() {
+        settings.active = Some(sub_id.clone());
     }
-    let saved = crate::backend::subscription::load_settings(data_dir).subscribe_url;
-    anyhow::ensure!(!saved.trim().is_empty(), "请先填写订阅地址");
-    Ok(saved)
+    let activate = settings.active.as_deref() == Some(sub_id.as_str());
+    crate::backend::subscription::save_settings(data_dir, settings)?;
+    Ok((count, activate))
+}
+
+/// 把一段订阅文本提交为活动 profile：内核在跑 → stage + 热重载；否则原子替换
+/// profile.yaml 并按新订阅重写 config.yaml（下次启动生效）。
+fn activate_profile_text(
+    core: Option<&crate::backend::mihomo_api::MihomoClient>,
+    cfg: &crate::backend::runtime::RuntimeCfg,
+    text: &str,
+) -> anyhow::Result<Option<crate::backend::proxy_view::ProxyView>> {
+    use anyhow::Context as _;
+    let staged = cfg
+        .workdir
+        .join(crate::backend::subscription::PROFILE_STAGED);
+    std::fs::write(&staged, text).context("写候选订阅失败")?;
+    match core {
+        Some(client) => Ok(Some(reload_core(client, cfg)?)),
+        None => {
+            crate::backend::subscription::atomic_replace(&staged, &cfg.profile_path)?;
+            crate::backend::runtime::write_config(cfg)?;
+            Ok(None)
+        }
+    }
 }
 
 /// 热重载候选订阅，只有内核接受后才提交为活动 profile/config。
@@ -564,6 +904,8 @@ fn mark_core_stopped(snapshot: &SharedSnapshot, message: &str) {
         snap.core_running = false;
         snap.tun_enabled = false;
         snap.view = Default::default();
+        snap.testing.clear();
+        snap.test_all_running = false;
         snap.failed_delays.clear();
         snap.message = message.into();
     });
@@ -606,6 +948,7 @@ mod tests {
         set_snap(&snapshot, |s| {
             s.core_running = true;
             s.tun_enabled = true;
+            s.test_all_running = true;
             s.view.nodes.push(crate::backend::proxy_view::NodeInfo {
                 name: "node".into(),
                 kind: "Vmess".into(),
@@ -619,9 +962,170 @@ mod tests {
         let snapshot = snapshot.read().unwrap();
         assert!(!snapshot.core_running);
         assert!(!snapshot.tun_enabled);
+        assert!(!snapshot.test_all_running);
         assert!(snapshot.view.nodes.is_empty());
         assert!(snapshot.failed_delays.is_empty());
         assert_eq!(snapshot.message, "内核意外退出");
+    }
+
+    fn sample_text(nodes: usize) -> String {
+        let items: Vec<String> = (0..nodes)
+            .map(|i| format!("  - {{name: n{i}, type: vmess}}"))
+            .collect();
+        format!("proxies:\n{}\n", items.join("\n"))
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("tailash-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn first_added_sub_becomes_active_and_activates() {
+        let dir = temp_dir("apply-first");
+        let mut settings = crate::backend::subscription::Settings::default();
+        let (count, activate) = apply_fetched_sub(
+            &mut settings,
+            &dir,
+            None,
+            Some("机场A"),
+            Some("https://a.example/sub"),
+            &sample_text(2),
+        )
+        .unwrap();
+        assert_eq!(count, 2);
+        assert!(activate, "第一条订阅应当自动成为活动订阅");
+        assert_eq!(settings.subscriptions.len(), 1);
+        assert_eq!(settings.subscriptions[0].name, "机场A");
+        assert_eq!(settings.subscriptions[0].node_count, Some(2));
+        let id = settings.active.clone().unwrap();
+        assert_eq!(
+            crate::backend::subscription::load_sub_profile(&dir, &id).is_some(),
+            true,
+            "订阅内容应落盘"
+        );
+        assert_eq!(
+            crate::backend::subscription::load_settings(&dir).active,
+            Some(id),
+            "settings.json 应保存活动订阅"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn second_added_sub_does_not_steal_activation() {
+        let dir = temp_dir("apply-second");
+        let mut settings = crate::backend::subscription::Settings::default();
+        apply_fetched_sub(&mut settings, &dir, None, Some("A"), Some("https://a"), &sample_text(1))
+            .unwrap();
+        let first_active = settings.active.clone();
+        let (_, activate) = apply_fetched_sub(
+            &mut settings,
+            &dir,
+            None,
+            Some("B"),
+            Some("https://b"),
+            &sample_text(1),
+        )
+        .unwrap();
+        assert!(!activate);
+        assert_eq!(settings.active, first_active, "已有活动订阅时不切换");
+        assert_eq!(settings.subscriptions.len(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn updating_active_sub_updates_meta_and_activates() {
+        let dir = temp_dir("apply-update");
+        let mut settings = crate::backend::subscription::Settings::default();
+        apply_fetched_sub(&mut settings, &dir, None, Some("A"), Some("https://a"), &sample_text(1))
+            .unwrap();
+        let id = settings.active.clone().unwrap();
+        let (count, activate) = apply_fetched_sub(
+            &mut settings,
+            &dir,
+            Some(&id),
+            None,
+            None,
+            &sample_text(3),
+        )
+        .unwrap();
+        assert_eq!(count, 3);
+        assert!(activate, "更新活动订阅应触发提交");
+        assert_eq!(settings.subscriptions[0].node_count, Some(3));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn updating_non_active_sub_does_not_activate() {
+        let dir = temp_dir("apply-inactive");
+        let mut settings = crate::backend::subscription::Settings::default();
+        apply_fetched_sub(&mut settings, &dir, None, Some("A"), Some("https://a"), &sample_text(1))
+            .unwrap();
+        apply_fetched_sub(&mut settings, &dir, None, Some("B"), Some("https://b"), &sample_text(1))
+            .unwrap();
+        let second = settings.subscriptions[1].id.clone();
+        settings.active = Some(second.clone());
+        let first = settings.subscriptions[0].id.clone();
+        let (_, activate) = apply_fetched_sub(
+            &mut settings,
+            &dir,
+            Some(&first),
+            None,
+            None,
+            &sample_text(2),
+        )
+        .unwrap();
+        assert!(!activate, "更新非活动订阅不触发提交");
+        assert_eq!(
+            settings.active.as_deref(),
+            Some(second.as_str()),
+            "活动订阅不应被改动"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn apply_fetched_sub_rejects_unknown_id_and_missing_name() {
+        let dir = temp_dir("apply-bad");
+        let mut settings = crate::backend::subscription::Settings::default();
+        assert!(apply_fetched_sub(&mut settings, &dir, Some("ghost"), None, None, &sample_text(1)).is_err());
+        assert!(
+            apply_fetched_sub(&mut settings, &dir, None, None, None, &sample_text(1)).is_err(),
+            "新增订阅缺 name/url 应报错"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sub_status_list_marks_active_and_carries_meta() {
+        let settings = crate::backend::subscription::Settings {
+            subscriptions: vec![
+                crate::backend::subscription::SubMeta {
+                    id: "s1".into(),
+                    name: "A".into(),
+                    url: "https://a".into(),
+                    node_count: Some(7),
+                    updated_at: Some(42),
+                },
+                crate::backend::subscription::SubMeta {
+                    id: "s2".into(),
+                    name: "B".into(),
+                    url: "https://b".into(),
+                    node_count: None,
+                    updated_at: None,
+                },
+            ],
+            active: Some("s2".into()),
+            subscribe_url: String::new(),
+        };
+        let subs = sub_status_list(&settings);
+        assert_eq!(subs.len(), 2);
+        assert!(!subs[0].active);
+        assert!(subs[1].active);
+        assert_eq!(subs[0].node_count, Some(7));
+        assert_eq!(subs[1].updated_at, None);
     }
 }
 

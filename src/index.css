@@ -1,0 +1,14 @@
+@import "tailwindcss";
+@plugin "daisyui" {
+  themes: light --default;
+}
+
+/* 覆盖 daisyUI light 主题的品牌色：默认 primary 是高饱和紫（oklch 45% 0.24 277），
+   对工具类应用过于浓艳，换成沉稳的蓝；其余色阶沿用 light 默认值。 */
+@plugin "daisyui/theme" {
+  name: "light";
+  default: true;
+  color-scheme: light;
+  --color-primary: oklch(52% 0.15 254);
+  --color-primary-content: oklch(97% 0.015 254);
+}

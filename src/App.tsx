@@ -1,51 +1,74 @@
+//! tailash 主界面：顶栏（品牌 + 三 tab 导航 + 状态徽标）+ 内容区 + 底部消息条。
+//! 状态唯一来源是 useSnapshot（后端 500ms 增量推送），命令一律经 sendCmd 异步下发。
 import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { useSnapshot } from "./api";
+import CoreTab from "./tabs/CoreTab";
+import SubsTab from "./tabs/SubsTab";
+import NodesTab from "./tabs/NodesTab";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+type Tab = "core" | "subs" | "nodes";
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+const TABS: { id: Tab; label: string }[] = [
+  { id: "core", label: "内核" },
+  { id: "subs", label: "订阅" },
+  { id: "nodes", label: "节点" },
+];
+
+export default function App() {
+  const snap = useSnapshot();
+  // 支持 #subs / #nodes 直达对应 tab（可带参数，如 #nodes?sort=delay；默认内核）
+  const [tab, setTab] = useState<Tab>(() => {
+    const hash = window.location.hash.slice(1).split("?")[0];
+    return TABS.some((t) => t.id === hash) ? (hash as Tab) : "core";
+  });
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+    <div className="flex h-screen flex-col">
+      <div className="navbar min-h-12 bg-base-200 px-4">
+        <span className="text-lg font-bold">tailash</span>
+        {/* 导航并入顶栏：品牌左侧、状态徽标右侧 */}
+        <div role="tablist" className="tabs tabs-box tabs-sm ml-3">
+          {TABS.map((t) => (
+            <a
+              key={t.id}
+              role="tab"
+              aria-selected={tab === t.id}
+              className={`tab ${tab === t.id ? "tab-active" : ""}`}
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+            </a>
+          ))}
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <span
+            className={`badge badge-sm ${
+              snap.coreRunning ? "badge-success" : "badge-error badge-outline"
+            }`}
+          >
+            {snap.coreRunning ? "内核运行中" : "内核未运行"}
+          </span>
+          <span
+            className={`badge badge-sm ${
+              snap.tunEnabled ? "badge-info" : "badge-ghost"
+            }`}
+          >
+            TUN {snap.tunEnabled ? "开" : "关"}
+          </span>
+        </div>
       </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
 
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+      <div className="flex-1 overflow-auto px-4 py-3">
+        <div className="mx-auto flex max-w-xl flex-col gap-4">
+          {tab === "core" && <CoreTab snap={snap} />}
+          {tab === "subs" && <SubsTab snap={snap} />}
+          {tab === "nodes" && <NodesTab snap={snap} />}
+        </div>
+      </div>
+
+      <div className="bg-base-200 px-4 py-1.5 text-sm text-base-content/70">
+        {snap.message}
+      </div>
+    </div>
   );
 }
-
-export default App;

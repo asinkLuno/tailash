@@ -89,8 +89,7 @@ pub fn run() {
                     .expect("设置数据目录权限失败");
             }
 
-            // 启动预填：上次保存的托管订阅地址；预填失败不阻塞启动。
-            let saved_url = backend::subscription::load_settings(&data_dir).subscribe_url;
+            // 启动：worker 自己加载订阅设置（含旧版迁移）并物化活动订阅。
             let cfg = RuntimeCfg {
                 profile_path: data_dir.join("profile.yaml"),
                 workdir: data_dir.clone(),
@@ -108,16 +107,11 @@ pub fn run() {
                 tx,
                 snapshot,
                 worker: Mutex::new(Some(worker)),
-                saved_url,
                 _instance_lock: instance_lock,
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::send_cmd,
-            commands::get_snapshot,
-            commands::get_saved_sub_url
-        ])
+        .invoke_handler(tauri::generate_handler![commands::send_cmd, commands::get_snapshot])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| match event {

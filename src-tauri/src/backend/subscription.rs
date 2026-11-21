@@ -8,11 +8,32 @@ const MAX_BODY_BYTES: u64 = 16 * 1024 * 1024;
 
 /// 订阅 profile 的暂存文件名（校验/重载通过后再原子替换）。
 pub const PROFILE_STAGED: &str = "profile.yaml.pending";
+/// 活动订阅的内容物化位置：runtime 的 profile_path 固定指到这里。
+pub const PROFILE_NAME: &str = "profile.yaml";
 
-#[derive(serde::Serialize, serde::Deserialize, Default)]
-pub struct Settings {
-    /// 托管订阅地址
+/// 一条订阅的元信息（settings.json 持久化；后端私有格式，沿用 snake_case）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SubMeta {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    /// 最近一次下载成功时的节点数
     #[serde(default)]
+    pub node_count: Option<usize>,
+    /// 最近一次下载成功的 unix 秒
+    #[serde(default)]
+    pub updated_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub struct Settings {
+    #[serde(default)]
+    pub subscriptions: Vec<SubMeta>,
+    /// 当前生效的订阅 id；None = 尚未选过
+    #[serde(default)]
+    pub active: Option<String>,
+    /// 旧版单订阅地址：只为读兼容，迁移后清空且不再写出
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub subscribe_url: String,
 }
 
@@ -28,6 +49,78 @@ pub fn load_settings(data_dir: &Path) -> Settings {
         .unwrap_or_default()
 }
 
+/// 订阅 id 只能进入文件名，白名单字符，挡住 settings.json 被手改成路径穿越。
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// 生成新订阅 id（纳秒时间戳，十六进制，天然满足 valid_id）。
+pub fn new_sub_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("s{nanos:x}")
+}
+
+/// 旧版单订阅 settings.json → 多订阅：包成一条订阅并设为活动；
+/// 已有 profile.yaml 就归档为该订阅的内容文件，切换回来不丢。
+pub fn migrate_legacy(settings: Settings, data_dir: &Path) -> Settings {
+    if !settings.subscriptions.is_empty() || settings.subscribe_url.trim().is_empty() {
+        return settings;
+    }
+    let id = new_sub_id();
+    if profile_path(data_dir).is_file()
+        && let Ok(text) = std::fs::read_to_string(profile_path(data_dir))
+    {
+        let _ = save_sub_profile(data_dir, &id, &text);
+    }
+    Settings {
+        subscriptions: vec![SubMeta {
+            id: id.clone(),
+            name: "默认订阅".into(),
+            url: settings.subscribe_url.clone(),
+            node_count: None,
+            updated_at: None,
+        }],
+        active: Some(id),
+        subscribe_url: String::new(),
+    }
+}
+
+pub fn profile_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(PROFILE_NAME)
+}
+
+fn subs_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("subs")
+}
+
+fn sub_profile_path(data_dir: &Path, id: &str) -> PathBuf {
+    subs_dir(data_dir).join(format!("{id}.yaml"))
+}
+
+/// 读某条订阅的已下载内容
+pub fn load_sub_profile(data_dir: &Path, id: &str) -> Option<String> {
+    debug_assert!(valid_id(id), "订阅 id 必须先过 valid_id 校验");
+    std::fs::read_to_string(sub_profile_path(data_dir, id)).ok()
+}
+
+/// 写某条订阅的内容（临时文件 + 原子替换，避免半截文件）
+pub fn save_sub_profile(data_dir: &Path, id: &str, text: &str) -> Result<()> {
+    debug_assert!(valid_id(id), "订阅 id 必须先过 valid_id 校验");
+    let dir = subs_dir(data_dir);
+    std::fs::create_dir_all(&dir)?;
+    let tmp = dir.join(format!(".{id}.tmp"));
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, sub_profile_path(data_dir, id))
+        .with_context(|| format!("提交订阅文件 {id} 失败"))
+}
+
+pub fn remove_sub_profile(data_dir: &Path, id: &str) {
+    let _ = std::fs::remove_file(sub_profile_path(data_dir, id));
+}
+
 /// 保存设置（父目录不存在则先创建）
 pub fn save_settings(data_dir: &Path, settings: &Settings) -> Result<()> {
     let path = settings_path(data_dir);
@@ -41,7 +134,7 @@ pub fn save_settings(data_dir: &Path, settings: &Settings) -> Result<()> {
 
 /// 校验文本是否为可用订阅：必须能解析 yaml 且含非空 proxies 段。
 /// 支持 base64 订阅也能被 mihomo 读的场合不管——这里只收 mihomo 全量 yaml。
-fn validate_profile_text(text: &str) -> Result<()> {
+pub fn validate_profile_text(text: &str) -> Result<()> {
     let profile: serde_yaml::Value = serde_yaml::from_str(text).context("订阅内容不是合法 yaml")?;
     let proxies = profile
         .get("proxies")
@@ -132,12 +225,84 @@ mod tests {
                 .as_nanos()
         ));
         let s = Settings {
-            subscribe_url: "https://example.invalid/sub?token=abc".into(),
+            subscriptions: vec![SubMeta {
+                id: "s1".into(),
+                name: "机场 A".into(),
+                url: "https://example.invalid/sub?token=abc".into(),
+                node_count: Some(42),
+                updated_at: Some(1_700_000_000),
+            }],
+            active: Some("s1".into()),
+            subscribe_url: String::new(),
         };
         save_settings(&dir, &s).unwrap();
         let got = load_settings(&dir);
-        assert_eq!(got.subscribe_url, s.subscribe_url);
+        assert_eq!(got.subscriptions, s.subscriptions);
+        assert_eq!(got.active, s.active);
+        assert_eq!(got.subscribe_url, "", "迁移后的 legacy 字段不再写出");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn legacy_settings_are_migrated_and_profile_archived() {
+        let dir = std::env::temp_dir().join(format!("tailash-migrate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            settings_path(&dir),
+            r#"{"subscribe_url":"https://old.example/sub"}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join(PROFILE_NAME), "proxies: []\n").unwrap();
+
+        let migrated = migrate_legacy(load_settings(&dir), &dir);
+
+        assert_eq!(migrated.subscriptions.len(), 1);
+        assert_eq!(migrated.subscriptions[0].url, "https://old.example/sub");
+        assert_eq!(migrated.active, Some(migrated.subscriptions[0].id.clone()));
+        assert_eq!(
+            load_sub_profile(&dir, migrated.active.as_deref().unwrap()).as_deref(),
+            Some("proxies: []\n"),
+            "旧 profile.yaml 应归档为该订阅的内容文件"
+        );
+        // 再读再迁移不应变化（幂等）
+        save_settings(&dir, &migrated).unwrap();
+        assert_eq!(migrate_legacy(load_settings(&dir), &dir), migrated);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn migration_skipped_when_no_legacy_url() {
+        let dir = std::env::temp_dir().join(format!("tailash-migrate-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = Settings::default();
+        assert_eq!(migrate_legacy(s.clone(), &dir), s);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sub_profile_files_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("tailash-subfile-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        save_sub_profile(&dir, "s1", "proxies: []\n").unwrap();
+        assert_eq!(load_sub_profile(&dir, "s1").as_deref(), Some("proxies: []\n"));
+        // 覆盖写
+        save_sub_profile(&dir, "s1", "proxies: [n]\n").unwrap();
+        assert_eq!(load_sub_profile(&dir, "s1").as_deref(), Some("proxies: [n]\n"));
+        assert!(load_sub_profile(&dir, "missing").is_none());
+        remove_sub_profile(&dir, "s1");
+        assert!(load_sub_profile(&dir, "s1").is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn valid_id_rejects_traversal_and_empty() {
+        assert!(valid_id("s18f3a"));
+        assert!(valid_id("sub-1_a"));
+        assert!(!valid_id(""));
+        assert!(!valid_id("../../etc"));
+        assert!(!valid_id("a/b"));
+        assert!(!valid_id("a b"));
+        assert!(!valid_id("../1"));
     }
 
     #[test]
@@ -145,7 +310,8 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("tailash-settings-missing-{}", std::process::id()));
         let got = load_settings(&dir);
-        assert_eq!(got.subscribe_url, "");
+        assert!(got.subscriptions.is_empty());
+        assert_eq!(got.active, None);
     }
 
     #[test]
@@ -154,7 +320,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("settings.json"), "{not json").unwrap();
         let got = load_settings(&dir);
-        assert_eq!(got.subscribe_url, "");
+        assert!(got.subscriptions.is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 

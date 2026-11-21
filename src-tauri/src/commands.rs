@@ -13,8 +13,6 @@ pub struct AppState {
     pub tx: std::sync::mpsc::Sender<UiCmd>,
     pub snapshot: SharedSnapshot,
     pub worker: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
-    /// 启动预填：上次保存的托管订阅地址
-    pub saved_url: String,
     /// flock 单实例锁存进状态，让它活到进程退出（drop 即解锁）。
     pub _instance_lock: crate::InstanceLock,
 }
@@ -32,8 +30,16 @@ pub enum Cmd {
     /// 在某个组里选中某个节点
     Select { group: String, node: String },
     TestAll,
-    /// 拉取托管订阅（url 空则用 settings.json 里保存的）
-    UpdateSub { url: String },
+    /// 测单个节点延迟
+    TestNode { name: String },
+    /// 更新某条订阅（id 空则更新当前活动订阅）
+    UpdateSub { id: String },
+    /// 添加订阅（下载校验通过后登记；第一条自动启用）
+    AddSub { name: String, url: String },
+    /// 删除某条订阅
+    RemoveSub { id: String },
+    /// 切换活动订阅
+    SwitchSub { id: String },
 }
 
 impl From<Cmd> for UiCmd {
@@ -45,7 +51,11 @@ impl From<Cmd> for UiCmd {
             Cmd::SetMode { mode } => Self::SetMode(mode),
             Cmd::Select { group, node } => Self::Select { group, node },
             Cmd::TestAll => Self::TestAll,
-            Cmd::UpdateSub { url } => Self::UpdateSub { url },
+            Cmd::TestNode { name } => Self::TestNode { name },
+            Cmd::UpdateSub { id } => Self::UpdateSub { id },
+            Cmd::AddSub { name, url } => Self::AddSub { name, url },
+            Cmd::RemoveSub { id } => Self::RemoveSub { id },
+            Cmd::SwitchSub { id } => Self::SwitchSub { id },
         }
     }
 }
@@ -60,10 +70,4 @@ pub fn send_cmd(state: State<'_, AppState>, cmd: Cmd) {
 #[tauri::command]
 pub fn get_snapshot(state: State<'_, AppState>) -> Snapshot {
     state.snapshot.read().unwrap().clone()
-}
-
-/// 启动预填：上次保存的托管订阅地址。
-#[tauri::command]
-pub fn get_saved_sub_url(state: State<'_, AppState>) -> String {
-    state.saved_url.clone()
 }

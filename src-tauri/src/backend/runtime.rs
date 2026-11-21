@@ -9,6 +9,7 @@ pub const TEST_URL: &str = "http://www.gstatic.com/generate_204";
 /// `config.yaml` 的暂存文件名（写完再原子替换）。
 pub const CONFIG_STAGED: &str = "config.yaml.pending";
 
+#[derive(Clone)]
 pub struct RuntimeCfg {
     pub profile_path: std::path::PathBuf,
     pub workdir: std::path::PathBuf,
@@ -95,6 +96,9 @@ fn find_mihomo_in(
     dirs.into_iter()
         .map(|dir| dir.join("mihomo"))
         .find(|candidate| is_executable(candidate))
+        // setcap 拒绝对符号链接操作（Invalid file ... for capability operation），
+        // 授权 TUN 需要真实文件路径，这里统一解析。
+        .map(|candidate| std::fs::canonicalize(&candidate).unwrap_or(candidate))
         .ok_or_else(|| anyhow::Error::msg(MIHOMO_MISSING))
 }
 
@@ -284,5 +288,23 @@ mod find_mihomo_tests {
             "{error}"
         );
         std::fs::remove_dir_all(plain).unwrap();
+    }
+
+    #[test]
+    fn symlinked_binary_is_canonicalized_for_setcap() {
+        // setcap 拒绝操作符号链接，授权 TUN 必须拿到真实文件路径
+        let real = dir_with_mihomo("find-real", 0o755);
+        let link_dir = std::env::temp_dir().join(format!("find-link-{}", std::process::id()));
+        std::fs::create_dir_all(&link_dir).unwrap();
+        std::os::unix::fs::symlink(real.join("mihomo"), link_dir.join("mihomo")).unwrap();
+
+        let found = find_mihomo_in([link_dir.clone()]).unwrap();
+        assert_eq!(
+            found,
+            std::fs::canonicalize(real.join("mihomo")).unwrap(),
+            "符号链接应解析为真实路径"
+        );
+        std::fs::remove_dir_all(link_dir).unwrap();
+        std::fs::remove_dir_all(real).unwrap();
     }
 }

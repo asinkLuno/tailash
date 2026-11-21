@@ -274,6 +274,20 @@ impl MihomoClient {
         Ok(serde_json::from_str(&body)?)
     }
 
+    /// 测试整个组。内核借此重跑该组的 url-test 选择逻辑：
+    /// 外部对单个节点的测速不会触发组内重算（fastNode 有 tolerance 且周期独立）。
+    pub fn group_delay(&self, name: &str, timeout_ms: u32, test_url: &str) -> Result<()> {
+        let path = format!(
+            "/group/{}/delay?timeout={}&url={}",
+            urlenc(name),
+            timeout_ms,
+            urlencode(test_url)
+        );
+        let (st, body) = self.request("GET", &path, None)?;
+        anyhow::ensure!(st == 200, "group delay {name} -> {st} {body}");
+        Ok(())
+    }
+
     /// 开关 TUN
     pub fn set_tun(&self, enable: bool) -> Result<()> {
         let payload = serde_json::json!({ "tun": { "enable": enable } }).to_string();
