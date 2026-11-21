@@ -77,7 +77,6 @@ fn spawn_snapshot_emitter(snapshot: SharedSnapshot, handle: tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = dirs_home().join("tailash");
             std::fs::create_dir_all(&data_dir).expect("创建 tailash 数据目录失败");

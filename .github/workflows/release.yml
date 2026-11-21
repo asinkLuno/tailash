@@ -43,6 +43,45 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: 'tailash v__VERSION__'
-          releaseBody: '请前往 Assets 下载对应平台的安装包。'
+          releaseBody: '请前往 Assets 下载对应平台的安装包。Arch Linux 用户可下载 .pkg.tar.zst 后执行 sudo pacman -U 安装。'
           releaseDraft: true
           prerelease: false
+
+      # Tauri CLI 尚不支持直接产出 .pkg.tar.zst（上游 pacman 目标只生成 AUR 的 tar.gz），
+      # 因此从 deb 中提取产物，在 archlinux 容器内用 makepkg 打出 Arch 二进制包并上传。
+      - name: Build and upload Arch Linux package (.pkg.tar.zst)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          DEB=$(ls src-tauri/target/release/bundle/deb/*.deb | head -n1)
+          PKGNAME=$(dpkg-deb -f "$DEB" Package)
+          PKGVER=${VERSION%%-*}
+          PKGDESC=$(dpkg-deb -f "$DEB" Description | head -n1)
+
+          mkdir -p arch-pkg/payload
+          dpkg-deb -x "$DEB" arch-pkg/payload
+          cat > arch-pkg/PKGBUILD <<EOF
+          pkgname=$PKGNAME
+          pkgver=$PKGVER
+          pkgrel=1
+          pkgdesc="$PKGDESC"
+          url="https://github.com/${GITHUB_REPOSITORY}"
+          arch=('x86_64')
+          license=('custom')
+          depends=('webkit2gtk-4.1' 'gtk3')
+          PKGEXT='.pkg.tar.zst'
+
+          package() {
+            cp -a "\$startdir/payload/." "\$pkgdir/"
+          }
+          EOF
+
+          docker run --rm -v "$PWD/arch-pkg:/work" archlinux:base-devel bash -euc '
+            useradd -m builder
+            chown -R builder:builder /work
+            su builder -c "cd /work && makepkg -f --nodeps"
+          '
+
+          gh release upload "v$VERSION" arch-pkg/*.pkg.tar.zst --clobber

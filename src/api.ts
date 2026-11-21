@@ -100,14 +100,23 @@ export function useSnapshot(): Snapshot {
       window.addEventListener(MOCK_SNAPSHOT_EVENT, onMock);
       return () => window.removeEventListener(MOCK_SNAPSHOT_EVENT, onMock);
     }
+    let unsubscribed = false;
     let unsubscribe: (() => void) | undefined;
     invoke<Snapshot>("get_snapshot")
-      .then(setSnap)
+      // 卸载后到达的快照不再写 setState
+      .then((s) => !unsubscribed && setSnap(s))
       .catch(() => {});
+    // 卸载早于 promise resolve 时也能正确 unlisten
     listen<Snapshot>("snapshot", (event) => setSnap(event.payload)).then(
-      (unlisten) => (unsubscribe = unlisten),
+      (unlisten) => {
+        if (unsubscribed) unlisten();
+        else unsubscribe = unlisten;
+      },
     );
-    return () => unsubscribe?.();
+    return () => {
+      unsubscribed = true;
+      unsubscribe?.();
+    };
   }, []);
   return snap;
 }

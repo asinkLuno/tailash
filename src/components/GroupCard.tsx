@@ -16,11 +16,11 @@ export interface SharedMaps {
 /** 卡片内的真节点按排序模式重排；组引用行始终保持在成员原位。 */
 export function sortNodes(nodes: NodeInfo[], sort: SortMode): NodeInfo[] {
   if (sort === "delay") {
-    return [...nodes].sort(
-      (a, b) =>
-        delaySortKey(a.delay)[0] - delaySortKey(b.delay)[0] ||
-        delaySortKey(a.delay)[1] - delaySortKey(b.delay)[1],
-    );
+    return [...nodes].sort((a, b) => {
+      const [ka, va] = delaySortKey(a.delay);
+      const [kb, vb] = delaySortKey(b.delay);
+      return ka - kb || va - vb;
+    });
   }
   if (sort === "name") {
     return [...nodes].sort((a, b) => a.name.localeCompare(b.name, "zh"));
@@ -84,22 +84,36 @@ interface Props {
   snap: Snapshot;
   group: GroupInfo;
   maps: SharedMaps;
+  /** 测速中/测速失败节点名集合（NodesTab 预构建，避免每行 includes） */
+  testing: Set<string>;
+  failed: Set<string>;
   sort: SortMode;
   onSelect: (group: string, node: string) => void;
   onTest: (name: string) => void;
 }
 
-export default function GroupCard({ snap, group, maps, sort, onSelect, onTest }: Props) {
+export default function GroupCard({
+  snap,
+  group,
+  maps,
+  testing,
+  failed,
+  sort,
+  onSelect,
+  onTest,
+}: Props) {
   const [open, setOpen] = useState(true);
   const isSelector = group.kind.toLowerCase() === "selector";
   const now = effectiveNow(maps, group);
   // 卡片头：完整解析链 + 末端节点的延迟徽标（末端是 DIRECT 等内建时无徽标）
   const header = resolveChainInfo(maps, group.name);
   // 排序只作用于真节点行；组引用/内建行保持成员原位（按订阅顺序走一遍成员）
-  const sortedNodes = sortNodes(
-    group.members.filter((m) => maps.nodes.has(m)).map((m) => maps.nodes.get(m)!),
-    sort,
-  );
+  const sortedNodes = open
+    ? sortNodes(
+        group.members.filter((m) => maps.nodes.has(m)).map((m) => maps.nodes.get(m)!),
+        sort,
+      )
+    : [];
   let nodeCursor = 0;
 
   return (
@@ -182,14 +196,14 @@ export default function GroupCard({ snap, group, maps, sort, onSelect, onTest }:
                       </span>
                       <button
                         className="btn btn-ghost btn-xs"
-                        disabled={snap.testing.includes(node.name) || snap.testAllRunning}
+                        disabled={testing.has(node.name) || snap.testAllRunning}
                         onClick={(e) => {
                           e.stopPropagation();
                           onTest(node.name);
                         }}
                         title={`测速当前解析到的节点「${node.name}」`}
                       >
-                        {snap.testing.includes(node.name) ? (
+                        {testing.has(node.name) ? (
                           <span className="loading loading-spinner loading-xs" />
                         ) : (
                           "测速"
@@ -211,8 +225,8 @@ export default function GroupCard({ snap, group, maps, sort, onSelect, onTest }:
                 <NodeRow
                   key={display.name}
                   node={display}
-                  testing={snap.testing.includes(display.name)}
-                  failed={snap.failedDelays.includes(display.name)}
+                  testing={testing.has(display.name)}
+                  failed={failed.has(display.name)}
                   busy={snap.testAllRunning}
                   selected={now === display.name}
                   clickable={isSelector}

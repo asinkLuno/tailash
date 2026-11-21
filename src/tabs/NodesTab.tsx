@@ -28,6 +28,9 @@ export default function NodesTab({ snap }: { snap: Snapshot }) {
     }),
     [snap.view],
   );
+  // testing/failedDelays 全是 O(n) 的 includes，行渲染时逐行查会放大成 O(n²)；预构建成 Set
+  const testing = useMemo(() => new Set(snap.testing), [snap.testing]);
+  const failed = useMemo(() => new Set(snap.failedDelays), [snap.failedDelays]);
 
   if (!snap.coreRunning) {
     return (
@@ -71,6 +74,8 @@ export default function NodesTab({ snap }: { snap: Snapshot }) {
           snap={snap}
           group={g}
           maps={maps}
+          testing={testing}
+          failed={failed}
           sort={sort}
           onSelect={(group, node) => sendCmd({ type: "select", group, node })}
           onTest={(name) => sendCmd({ type: "testNode", name })}
@@ -85,8 +90,8 @@ export default function NodesTab({ snap }: { snap: Snapshot }) {
               <NodeRow
                 key={node.name}
                 node={node}
-                testing={snap.testing.includes(node.name)}
-                failed={snap.failedDelays.includes(node.name)}
+                testing={testing.has(node.name)}
+                failed={failed.has(node.name)}
                 clickable={false}
                 onTest={() => sendCmd({ type: "testNode", name: node.name })}
               />
