@@ -11,20 +11,7 @@ jobs:
   publish-tauri:
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: 'macos-latest' # Apple Silicon (M 系列芯片)
-            args: '--target aarch64-apple-darwin'
-          - platform: 'macos-latest' # Intel 芯片
-            args: '--target x86_64-apple-darwin'
-          - platform: 'ubuntu-22.04' # Linux (deb / rpm / AppImage)
-            args: ''
-          - platform: 'windows-latest' # Windows (msi / nsis)
-            args: ''
-
-    runs-on: ${{ matrix.platform }}
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -36,16 +23,13 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
 
-      - name: Install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
@@ -62,4 +46,3 @@ jobs:
           releaseBody: '请前往 Assets 下载对应平台的安装包。'
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }}
