@@ -1,0 +1,10 @@
+<!-- tailash v8「轨道徽章」:双环徽章 + 虚线中环,内部双层彗尾肘弯,深色彗首,徽章感十足 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <circle cx="50" cy="50" r="42" fill="none" stroke="#1A69BC" stroke-width="2"/>
+  <circle cx="50" cy="50" r="33" fill="none" stroke="#1A69BC" stroke-width="1.2" stroke-dasharray="3 5" opacity="0.4"/>
+  <path d="M 24 66 A 40 40 0 0 1 66 24" fill="none" stroke="#1A69BC" stroke-width="2" stroke-linecap="round" opacity="0.45"/>
+  <path d="M 36 64 A 28 28 0 0 1 64 36" fill="none" stroke="#1A69BC" stroke-width="8.5" stroke-linecap="round"/>
+  <circle cx="64" cy="36" r="6.5" fill="#003F8F"/>
+  <circle cx="79.7" cy="20.3" r="2.5" fill="#78A8E2"/>
+  <circle cx="20.3" cy="79.7" r="2.5" fill="#78A8E2"/>
+</svg>

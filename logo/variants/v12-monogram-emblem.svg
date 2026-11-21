@@ -1,0 +1,12 @@
+<!-- tailash v12「徽章 t」:双层圆角方徽 + 几何 t 单字标,尾锋卫星点与角部彗尾点缀 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect x="14" y="14" width="72" height="72" rx="20" fill="none" stroke="#1A69BC" stroke-width="2.5"/>
+  <rect x="21" y="21" width="58" height="58" rx="14" fill="none" stroke="#1A69BC" stroke-width="1" opacity="0.35"/>
+  <g fill="none" stroke="#1A69BC" stroke-width="6" stroke-linecap="round">
+    <path d="M 38 44 L 62 44"/>
+    <path d="M 50 28 L 50 55 C 50 62, 55 66, 62 66"/>
+  </g>
+  <circle cx="70" cy="68" r="2.5" fill="#78A8E2"/>
+  <circle cx="66" cy="31" r="2.5" fill="#78A8E2" opacity="0.8"/>
+  <circle cx="71" cy="26" r="1.8" fill="#78A8E2" opacity="0.5"/>
+</svg>

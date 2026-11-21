@@ -1,0 +1,9 @@
+<!-- tailash v3「三重尾流」:三条粗细递减的流线同向爬升,主线末端凝成彗首,风一样的速度感 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <g fill="none" stroke="#1A69BC" stroke-linecap="round">
+    <path d="M 24 65 C 44 65, 58 55, 74 37" stroke-width="5"/>
+    <path d="M 20 50 C 36 50, 46 45, 58 33" stroke-width="4" opacity="0.55"/>
+    <path d="M 27 37 C 38 37, 44 34, 51 28" stroke-width="3" opacity="0.3"/>
+  </g>
+  <circle cx="74" cy="37" r="6" fill="#1A69BC"/>
+</svg>

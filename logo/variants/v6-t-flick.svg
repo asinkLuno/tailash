@@ -1,0 +1,7 @@
+<!-- tailash v6「t 字尾锋」:几何化小写 t,竖笔收尾向右甩出尾锋,名字即标志 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <g fill="none" stroke="#1A69BC" stroke-width="7" stroke-linecap="round">
+    <path d="M 34 40 L 66 40"/>
+    <path d="M 50 20 L 50 54 C 50 64, 56 72, 68 72"/>
+  </g>
+</svg>

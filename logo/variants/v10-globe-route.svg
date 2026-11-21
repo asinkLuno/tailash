@@ -1,0 +1,13 @@
+<!-- tailash v10「星球航线」:线框星球(双纬线双经线)+ 环球彗尾航线,出口节点飞离 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <g fill="none" stroke="#1A69BC">
+    <circle cx="47" cy="53" r="26" stroke-width="2.5"/>
+    <ellipse cx="47" cy="53" rx="26" ry="10" stroke-width="1.5" opacity="0.45"/>
+    <ellipse cx="47" cy="53" rx="26" ry="19" stroke-width="1.2" opacity="0.25"/>
+    <ellipse cx="47" cy="53" rx="10" ry="26" stroke-width="1.5" opacity="0.45"/>
+    <ellipse cx="47" cy="53" rx="19" ry="26" stroke-width="1.2" opacity="0.25"/>
+  </g>
+  <path d="M 23 77 A 34 34 0 1 1 78.9 41.4" fill="none" stroke="#1A69BC" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="78.9" cy="41.4" r="6.5" fill="#003F8F"/>
+  <circle cx="87" cy="33" r="3" fill="#1A69BC" opacity="0.6"/>
+</svg>

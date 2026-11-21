@@ -1,0 +1,10 @@
+<!-- tailash v4「汇流」:三条流线呈漏斗状汇聚进内核,再甩出一条下垂尾迹——多订阅合一的故事 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <g fill="none" stroke="#1A69BC" stroke-width="4" stroke-linecap="round">
+    <path d="M 22 32 L 46 37"/>
+    <path d="M 22 46 L 58 46"/>
+    <path d="M 22 60 L 46 55"/>
+    <path d="M 58 46 C 66 46, 72 50, 74 58"/>
+  </g>
+  <circle cx="74" cy="64" r="5.5" fill="#1A69BC"/>
+</svg>

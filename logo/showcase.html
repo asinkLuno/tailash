@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>tailash — Logo Design Exploration</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600&family=JetBrains+Mono:wght@300;400&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            background: #FAFAFA;
+            color: #1A1A1A;
+            overflow-x: hidden;
+        }
+
+        .font-mono { font-family: 'JetBrains Mono', 'Courier New', monospace; }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.03'/%3E%3C/svg%3E");
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        html { scroll-behavior: smooth; }
+
+        .tracking-ultra-wide { letter-spacing: 0.2em; }
+        .text-balance { text-wrap: balance; }
+
+        .logo-card {
+            transition: transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .logo-card:hover { transform: translateY(-4px); }
+
+        .logo-canvas { position: relative; }
+
+        .logo-aura {
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle, rgba(26,105,188,0.10) 0%, transparent 70%);
+            border-radius: 50%;
+            transform: scale(0.5);
+            opacity: 0;
+            transition: all 1s cubic-bezier(0.16, 1, 0.3, 1);
+            filter: blur(40px);
+            pointer-events: none;
+        }
+        .logo-card:hover .logo-aura { transform: scale(1); opacity: 1; }
+
+        .divider-line {
+            width: 0;
+            height: 1px;
+            background: #1A1A1A;
+            opacity: 0.2;
+            transition: width 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .logo-card:hover .divider-line { width: 100%; }
+
+        /* 应用图标场景条:浅色 / 品牌蓝 / 深色 三种底座 */
+        .tile-strip {
+            display: flex;
+            gap: 14px;
+            justify-content: center;
+            margin-bottom: 28px;
+        }
+        .tile {
+            width: 52px; height: 52px;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .tile:hover { transform: scale(1.08) rotate(-3deg); }
+        .tile-light { background: #FFFFFF; border: 1px solid rgba(0,0,0,0.08); }
+        .tile-brand { background: #1A69BC; }
+        .tile-dark  { background: #0B1526; }
+        .tile svg { width: 34px; height: 34px; }
+
+        .grid6 {
+            max-width: 1280px;
+            width: 100%;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+            gap: 64px 48px;
+        }
+
+        .glyph { color: #1A69BC; }
+        .glyph svg { width: 100%; height: 100%; display: block; }
+    </style>
+</head>
+<body>
+
+<div class="min-h-screen flex flex-col items-center py-20 px-6" style="min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:80px 24px;">
+
+    <!-- Header -->
+    <div style="text-align:center; margin-bottom:80px; max-width:760px;">
+        <h1 style="font-size:72px; font-weight:200; letter-spacing:0.06em; margin-bottom:24px;">tailash</h1>
+        <p class="font-mono tracking-ultra-wide" style="font-size:12px; opacity:0.4; text-transform:uppercase; margin-bottom:32px;">
+            TAIL TRAIL · PROXY CORE MANAGER · APP ICON EXPLORATION
+        </p>
+        <div style="width:48px; height:1px; background:#1A1A1A; margin:0 auto; opacity:0.3;"></div>
+    </div>
+
+    <!-- Section 1: Minimal Compositions -->
+    <div style="text-align:center; margin-bottom:72px; max-width:760px;">
+        <h2 style="font-size:44px; font-weight:200; letter-spacing:0.06em; margin-bottom:20px;">极简构成</h2>
+        <p class="font-mono tracking-ultra-wide" style="font-size:12px; opacity:0.4; text-transform:uppercase; margin-bottom:28px;">
+            MINIMAL COMPOSITIONS · V1 – V6
+        </p>
+        <div style="width:48px; height:1px; background:#1A1A1A; margin:0 auto; opacity:0.3;"></div>
+    </div>
+
+    <!-- Logo Grid -->
+    <div class="grid6" style="margin-bottom:128px;">
+
+        <!-- v1 comet -->
+        <div class="logo-card" style="display:flex; flex-direction:column; align-items:center; cursor:pointer;">
+            <div style="width:256px; height:256px; margin-bottom:40px; display:flex; align-items:center; justify-content:center; position:relative;">
+                <div class="logo-aura"></div>
+                <div class="glyph logo-canvas" style="width:128px; height:128px; z-index:1;">
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M 26 74 A 46 46 0 0 1 72 28" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round"/>
+                        <circle cx="72" cy="28" r="8.5" fill="currentColor"/>
+                        <circle cx="83" cy="17" r="3" fill="currentColor" opacity="0.55"/>
+                    </svg>
+                </div>
+            </div>
+            <div class="tile-strip">
+                <div class="tile tile-light"><svg viewBox="0 0 100 100"><g color="#1A69BC"><path d="M 26 74 A 46 46 0 0 1 72 28" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round"/><circle cx="72" cy="28" r="8.5" fill="currentColor"/><circle cx="83" cy="17" r="3" fill="currentColor" opacity="0.55"/></g></svg></div>
+                <div class="tile tile-brand"><svg viewBox="0 0 100 100"><g color="#FFFFFF"><path d="M 26 74 A 46 46 0 0 1 72 28" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round"/><circle cx="72" cy="28" r="8.5" fill="currentColor"/><circle cx="83" cy="17" r="3" fill="currentColor" opacity="0.55"/></g></svg></div>
+                <div class="tile tile-dark"><svg viewBox="0 0 100 100"><g color="#FFFFFF"><path d="M 26 74 A 46 46 0 0 1 72 28" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round"/><circle cx="72" cy="28" r="8.5" fill="currentColor"/><circle cx="83" cy="17" r="3" fill="currentColor" opacity="0.55"/></g></svg></div>
+            </div>
+            <div style="text-align:center; width:100%; padding:0 16px;">
+                <h2 style="font-size:20px; font-weight:500; letter-spacing:0.08em; margin-bottom:8px; text-transform:uppercase;">彗尾 Comet</h2>
+                <h3 class="font-mono" style="font-size:12px; opacity:0.5; letter-spacing:0.15em; margin-bottom:24px;">纯几何 · 弧带 + 彗首</h3>
+                <p style="font-size:14px; line-height:1.8; opacity:0.7; text-align:left; font-weight:300;" class="text-balance">
+                    一段 90° 圆弧带从左下扫向右上,末端圆点是彗首,前方淡点是下一个出口节点。最克制的几何语汇,16px 下依然锋利,是最稳妥的应用图标。
+                </p>
+            </div>
+            <div class="divider-line" style="margin-top:32px;"></div>
+        </div>
+
+        <!-- v2 capsule trail -->
+        <div class="logo-card" style="display:flex; flex-direction:column; align-items:center; cursor:pointer;">
+            <div style="width:256px; height:256px; margin-bottom:40px; display:flex; align-items:center; justify-content:center; position:relative;">
+                <div class="logo-aura"></div>
+                <div class="glyph logo-canvas" style="width:128px; height:128px; z-index:1;">
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <g fill="currentColor">
+                            <rect x="-4.5" y="-2.5" width="9" height="5" rx="2.5" transform="translate(28 71) rotate(-88)"/>
+                            <rect x="-5.5" y="-2.75" width="11" height="5.5" rx="2.75" transform="translate(34 52.5) rotate(-63)"/>
+                            <rect x="-6.25" y="-3" width="12.5" height="6" rx="3" transform="translate(48 37) rotate(-38)"/>
+                            <rect x="-7" y="-3.25" width="14" height="6.5" rx="3.25" transform="translate(65 29) rotate(-13)"/>
+                            <circle cx="79" cy="28" r="8"/>
+                        </g>
+                    </svg>
+                </div>
+            </div>
+            <div class="tile-strip">
+                <div class="tile tile-light"><svg viewBox="0 0 100 100"><g fill="#1A69BC"><rect x="-4.5" y="-2.5" width="9" height="5" rx="2.5" transform="translate(28 71) rotate(-88)"/><rect x="-5.5" y="-2.75" width="11" height="5.5" rx="2.75" transform="translate(34 52.5) rotate(-63)"/><rect x="-6.25" y="-3" width="12.5" height="6" rx="3" transform="translate(48 37) rotate(-38)"/><rect x="-7" y="-3.25" width="14" height="6.5" rx="3.25" transform="translate(65 29) rotate(-13)"/><circle cx="79" cy="28" r="8"/></g></svg></div>
+                <div class="tile tile-brand"><svg viewBox="0 0 100 100"><g fill="#FFFFFF"><rect x="-4.5" y="-2.5" width="9" height="5" rx="2.5" transform="translate(28 71) rotate(-88)"/><rect x="-5.5" y="-2.75" width="11" height="5.5" rx="2.75" transform="translate(34 52.5) rotate(-63)"/><rect x="-6.25" y="-3" width="12.5" height="6" rx="3" transform="translate(48 37) rotate(-38)"/><rect x="-7" y="-3.25" width="14" height="6.5" rx="3.25" transform="translate(65 29) rotate(-13)"/><circle cx="79" cy="28" r="8"/></g></svg></div>
+                <div class="tile tile-dark"><svg viewBox="0 0 100 100"><g fill="#FFFFFF"><rect x="-4.5" y="-2.5" width="9" height="5" rx="2.5" transform="translate(28 71) rotate(-88)"/><rect x="-5.5" y="-2.75" width="11" height="5.5" rx="2.75" transform="translate(34 52.5) rotate(-63)"/><rect x="-6.25" y="-3" width="12.5" height="6" rx="3" transform="translate(48 37) rotate(-38)"/><rect x="-7" y="-3.25" width="14" height="6.5" rx="3.25" transform="translate(65 29) rotate(-13)"/><circle cx="79" cy="28" r="8"/></g></svg></div>
+            </div>
+            <div style="text-align:center; width:100%; padding:0 16px;">
+                <h2 style="font-size:20px; font-weight:500; letter-spacing:0.08em; margin-bottom:8px; text-transform:uppercase;">胶囊尾迹 Capsule Trail</h2>
+                <h3 class="font-mono" style="font-size:12px; opacity:0.5; letter-spacing:0.15em; margin-bottom:24px;">点阵系统 · 切向胶囊</h3>
+                <p style="font-size:14px; line-height:1.8; opacity:0.7; text-align:left; font-weight:300;" class="text-balance">
+                    沿弧线切向排列的胶囊由小到大,像拖尾被逐渐甩近。离散元素带来独特的节奏感与呼吸感,倾斜 45° 放置即是一枚动感十足的徽标。
+                </p>
+            </div>
+            <div class="divider-line" style="margin-top:32px;"></div>
+        </div>
+
+        <!-- v3 streams -->
+        <div class="logo-card" style="display:flex; flex-direction:column; align-items:center; cursor:pointer;">
+            <div style="width:256px; height:256px; margin-bottom:40px; display:flex; align-items:center; justify-content:center; position:relative;">
+                <div class="logo-aura"></div>
+                <div class="glyph logo-canvas" style="width:128px; height:128px; z-index:1;">
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <g fill="none" stroke="currentColor" stroke-linecap="round">
+                            <path d="M 24 65 C 44 65, 58 55, 74 37" stroke-width="5"/>
+                            <path d="M 20 50 C 36 50, 46 45, 58 33" stroke-width="4" opacity="0.55"/>
+                            <path d="M 27 37 C 38 37, 44 34, 51 28" stroke-width="3" opacity="0.3"/>
+                        </g>
+                        <circle cx="74" cy="37" r="6" fill="currentColor"/>
+                    </svg>
+                </div>
+            </div>
+            <div class="tile-strip">
+                <div class="tile tile-light"><svg viewBox="0 0 100 100"><g color="#1A69BC"><g fill="none" stroke="currentColor" stroke-linecap="round"><path d="M 24 65 C 44 65, 58 55, 74 37" stroke-width="5"/><path d="M 20 50 C 36 50, 46 45, 58 33" stroke-width="4" opacity="0.55"/><path d="M 27 37 C 38 37, 44 34, 51 28" stroke-width="3" opacity="0.3"/></g><circle cx="74" cy="37" r="6" fill="currentColor"/></g></svg></div>
+                <div class="tile tile-brand"><svg viewBox="0 0 100 100"><g color="#FFFFFF"><g fill="none" stroke="currentColor" stroke-linecap="round"><path d="M 24 65 C 44 65, 58 55, 74 37" stroke-width="5"/><path d="M 20 50 C 36 50, 46 45, 58 33" stroke-width="4" opacity="0.55"/><path d="M 27 37 C 38 37, 44 34, 51 28" stroke-width="3" opacity="0.3"/></g><circle cx="74" cy="37" r="6" fill="currentColor"/></g></svg></div>
+                <div class="tile tile-dark"><svg viewBox="0 0 100 100"><g color="#FFFFFF"><g fill="none" stroke="currentColor" stroke-linecap="round"><path d="M 24 65 C 44 65, 58 55, 74 37" stroke-width="5"/><path d="M 20 50 C 36 50, 46 45, 58 33" stroke-width="4" opacity="0.55"/><path d="M 27 37 C 38 37, 44 34, 51 28" stroke-width="3" opacity="0.3"/></g><circle cx="74" cy="37" r="6" fill="currentColor"/></g></svg></div>
+            </div>
+            <div style="text-align:center; width:100%; padding:0 16px;">
+                <h2 style="font-size:20px; font-weight:500; letter-spacing:0.08em; margin-bottom:8px; text-transform:uppercase;">三重尾流 Triple Stream</h2>
+                <h3 class="font-mono" style="font-size:12px; opacity:0.5; letter-spacing:0.15em; margin-bottom:24px;">线条系统 · 递减流线</h3>
+                <p style="font-size:14px; line-height:1.8; opacity:0.7; text-align:left; font-weight:300;" class="text-balance">
+                    三条粗细递减的流线同向爬升,主线末端凝成彗首。透明度制造纵深,像代理链路上的多级跳——轻盈、快速、有风感。
+                </p>
+            </div>
+            <div class="divider-line" style="margin-top:32px;"></div>
+        </div>
+
+        <!-- v4 confluence -->
+        <div class="logo-card" style="display:flex; flex-direction:column; align-items:center; cursor:pointer;">
+            <div style="width:256px; height:256px; margin-bottom:40px; display:flex; align-items:center; justify-content:center; position:relative;">
+                <div class="logo-aura"></div>
+                <div class="glyph logo-canvas" style="width:128px; height:128px; z-index:1;">
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <g fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round">
+                            <path d="M 22 32 L 46 37"/>
+                            <path d="M 22 46 L 58 46"/>
+                            <path d="M 22 60 L 46 55"/>
+                            <path d="M 58 46 C 66 46, 72 50, 74 58"/>
+                        </g>
+                        <circle cx="74" cy="64" r="5.5" fill="currentColor"/>
+                    </svg>
+                </div>
+            </div>
+            <div class="tile-strip">
+                <div class="tile tile-light"><svg viewBox="0 0 100 100"><g color="#1A69BC"><g fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><path d="M 22 32 L 46 37"/><path d="M 22 46 L 58 46"/><path d="M 22 60 L 46 55"/><path d="M 58 46 C 66 46, 72 50, 74 58"/></g><circle cx="74" cy="64" r="5.5" fill="currentColor"/></g></svg></div>
+                <div class="tile tile-brand"><svg viewBox="0 0 100 100"><g color="#FFFFFF"><g fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><path d="M 22 32 L 46 37"/><path d="M 22 46 L 58 46"/><path d="M 22 60 L 46 55"/><path d="M 58 46 C 66 46, 72 50, 74 58"/></g><circle cx="74" cy="64" r="5.5" fill="currentColor"/></g></svg></div>
+                <div class="tile tile-dark"><svg viewBox="0 0 100 100"><g color="#FFFFFF"><g fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><path d="M 22 32 L 46 37"/><path d="M 22 46 L 58 46"/><path d="M 22 60 L 46 55"/><path d="M 58 46 C 66 46, 72 50, 74 58"/></g><circle cx="74" cy="64" r="5.5" fill="currentColor"/></g></svg></div>
+            </div>
+            <div style="text-align:center; width:100%; padding:0 16px;">
+                <h2 style="font-size:20px; font-weight:500; letter-spacing:0.08em; margin-bottom:8px; text-transform:uppercase;">汇流 Confluence</h2>
+                <h3 class="font-mono" style="font-size:12px; opacity:0.5; letter-spacing:0.15em; margin-bottom:24px;">线条 + 几何 · 漏斗汇聚</h3>
+                <p style="font-size:14px; line-height:1.8; opacity:0.7; text-align:left; font-weight:300;" class="text-balance">
+                    三条流线呈漏斗状汇聚进内核,再甩出一条下垂尾迹。恰好是"多订阅合一、规则分流出口"的产品叙事,故事性最强。
+                </p>
+            </div>
+            <div class="divider-line" style="margin-top:32px;"></div>
+        </div>
+
+        <!-- v5 node chain -->
+        <div class="logo-card" style="display:flex; flex-direction:column; align-items:center; cursor:pointer;">
+            <div style="width:256px; height:256px; margin-bottom:40px; display:flex; align-items:center; justify-content:center; position:relative;">
+                <div class="logo-aura"></div>
+                <div class="glyph logo-canvas" style="width:128px; height:128px; z-index:1;">
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M 26 72 C 36 60, 46 56, 54 50 C 62 44, 68 38, 74 28" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+                        <g fill="currentColor">
+                            <circle cx="36.4" cy="61.9" r="4.5"/>
+                            <circle cx="63.8" cy="41.5" r="5.5"/>
+                            <circle cx="74" cy="28" r="8"/>
+                            <circle cx="44" cy="32" r="2.2" opacity="0.3"/>
+                        </g>
+                    </svg>
+                </div>
+            </div>
+            <div class="tile-strip">
+                <div class="tile tile-light"><svg viewBox="0 0 100 100"><g color="#1A69BC"><path d="M 26 72 C 36 60, 46 56, 54 50 C 62 44, 68 38, 74 28" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><g fill="currentColor"><circle cx="36.4" cy="61.9" r="4.5"/><circle cx="63.8" cy="41.5" r="5.5"/><circle cx="74" cy="28" r="8"/><circle cx="44" cy="32" r="2.2" opacity="0.3"/></g></g></svg></div>
+                <div class="tile tile-brand"><svg viewBox="0 0 100 100"><g color="#FFFFFF"><path d="M 26 72 C 36 60, 46 56, 54 50 C 62 44, 68 38, 74 28" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><g fill="currentColor"><circle cx="36.4" cy="61.9" r="4.5"/><circle cx="63.8" cy="41.5" r="5.5"/><circle cx="74" cy="28" r="8"/><circle cx="44" cy="32" r="2.2" opacity="0.3"/></g></g></svg></div>
+                <div class="tile tile-dark"><svg viewBox="0 0 100 100"><g color="#FFFFFF"><path d="M 26 72 C 36 60, 46 56, 54 50 C 62 44, 68 38, 74 28" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><g fill="currentColor"><circle cx="36.4" cy="61.9" r="4.5"/><circle cx="63.8" cy="41.5" r="5.5"/><circle cx="74" cy="28" r="8"/><circle cx="44" cy="32" r="2.2" opacity="0.3"/></g></g></svg></div>
+            </div>
+            <div style="text-align:center; width:100%; padding:0 16px;">
+                <h2 style="font-size:20px; font-weight:500; letter-spacing:0.08em; margin-bottom:8px; text-transform:uppercase;">节点链 Node Chain</h2>
+                <h3 class="font-mono" style="font-size:12px; opacity:0.5; letter-spacing:0.15em; margin-bottom:24px;">节点网络 · 逐级放大</h3>
+                <p style="font-size:14px; line-height:1.8; opacity:0.7; text-align:left; font-weight:300;" class="text-balance">
+                    细线串起逐级放大的节点,链尾是彗首,旁有一颗若隐若现的卫星节点。代理链路的拓扑感,最具技术气质。
+                </p>
+            </div>
+            <div class="divider-line" style="margin-top:32px;"></div>
+        </div>
+
+        <!-- v6 t flick -->
+        <div class="logo-card" style="display:flex; flex-direction:column; align-items:center; cursor:pointer;">
+            <div style="width:256px; height:256px; margin-bottom:40px; display:flex; align-items:center; justify-content:center; position:relative;">
+                <div class="logo-aura"></div>
+                <div class="glyph logo-canvas" style="width:128px; height:128px; z-index:1;">
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round">
+                            <path d="M 34 40 L 66 40"/>
+                            <path d="M 50 20 L 50 54 C 50 64, 56 72, 68 72"/>
+                        </g>
+                    </svg>
+                </div>
+            </div>
+            <div class="tile-strip">
+                <div class="tile tile-light"><svg viewBox="0 0 100 100"><g color="#1A69BC"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round"><path d="M 34 40 L 66 40"/><path d="M 50 20 L 50 54 C 50 64, 56 72, 68 72"/></g></g></svg></div>
+                <div class="tile tile-brand"><svg viewBox="0 0 100 100"><g color="#FFFFFF"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round"><path d="M 34 40 L 66 40"/><path d="M 50 20 L 50 54 C 50 64, 56 72, 68 72"/></g></g></svg></div>
+                <div class="tile tile-dark"><svg viewBox="0 0 100 100"><g color="#FFFFFF"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round"><path d="M 34 40 L 66 40"/><path d="M 50 20 L 50 54 C 50 64, 56 72, 68 72"/></g></g></svg></div>
+            </div>
+            <div style="text-align:center; width:100%; padding:0 16px;">
+                <h2 style="font-size:20px; font-weight:500; letter-spacing:0.08em; margin-bottom:8px; text-transform:uppercase;">t 字尾锋 T-Flick</h2>
+                <h3 class="font-mono" style="font-size:12px; opacity:0.5; letter-spacing:0.15em; margin-bottom:24px;">字母构成 · 单字标</h3>
+                <p style="font-size:14px; line-height:1.8; opacity:0.7; text-align:left; font-weight:300;" class="text-balance">
+                    把名字画进标志:几何化的小写 t,竖笔收尾向右甩出尾锋。辨识度最高,缩小后依然一眼是"tailash 的 t"。
+                </p>
+            </div>
+            <div class="divider-line" style="margin-top:32px;"></div>
+        </div>
+
+    </div>
+
+    <!-- Section 2: Complex Compositions -->
+    <div style="text-align:center; margin-bottom:72px; max-width:760px;">
+        <h2 style="font-size:44px; font-weight:200; letter-spacing:0.06em; margin-bottom:20px;">复杂构成</h2>
+        <p class="font-mono tracking-ultra-wide" style="font-size:12px; opacity:0.4; text-transform:uppercase; margin-bottom:28px;">
+            COMPLEX COMPOSITIONS · V7 – V12
+        </p>
+        <div style="width:48px; height:1px; background:#1A1A1A; margin:0 auto; opacity:0.3;"></div>
+    </div>
+
+    <div class="grid6" style="margin-bottom:64px;">
+
+        <!-- v7 vortex -->
+        <div class="logo-card" style="display:flex; flex-direction:column; align-items:center; cursor:pointer;">
+            <div style="width:256px; height:256px; margin-bottom:40px; display:flex; align-items:center; justify-content:center; position:relative;">
+                <div class="logo-aura"></div>
+                <div class="logo-canvas" style="width:128px; height:128px; z-index:1;">
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <g fill="none" stroke="#1A69BC" stroke-linecap="round">
+                            <path d="M 77.9 49.4 A 30 30 0 1 1 50.6 22.1" stroke-width="6.5"/>
+                            <path d="M 68.7 55.6 A 21 21 0 1 1 55.2 32.3" stroke-width="5.5" opacity="0.8"/>
+                            <path d="M 59.3 57.3 A 12.5 12.5 0 1 1 55.2 41.8" stroke-width="4.5" opacity="0.6"/>
+                        </g>
+                        <circle cx="48" cy="52" r="3.5" fill="#1A69BC"/>
+                        <circle cx="62" cy="27" r="2.5" fill="#1A69BC" opacity="0.6"/>
+                        <circle cx="72" cy="24" r="3.5" fill="#1A69BC"/>
+                        <circle cx="82" cy="20" r="6.5" fill="#003F8F"/>
+                    </svg>
+                </div>
+            </div>
+            <div class="tile-strip">
+                <div class="tile tile-light"><svg viewBox="0 0 100 100"><g fill="none" stroke="#1A69BC" stroke-linecap="round"><path d="M 77.9 49.4 A 30 30 0 1 1 50.6 22.1" stroke-width="6.5"/><path d="M 68.7 55.6 A 21 21 0 1 1 55.2 32.3" stroke-width="5.5" opacity="0.8"/><path d="M 59.3 57.3 A 12.5 12.5 0 1 1 55.2 41.8" stroke-width="4.5" opacity="0.6"/></g><g fill="#1A69BC"><circle cx="48" cy="52" r="3.5"/><circle cx="62" cy="27" r="2.5" opacity="0.6"/><circle cx="72" cy="24" r="3.5"/></g><circle cx="82" cy="20" r="6.5" fill="#003F8F"/></svg></div>
+                <div class="tile tile-brand"><svg viewBox="0 0 100 100"><g fill="none" stroke="#FFFFFF" stroke-linecap="round"><path d="M 77.9 49.4 A 30 30 0 1 1 50.6 22.1" stroke-width="6.5"/><path d="M 68.7 55.6 A 21 21 0 1 1 55.2 32.3" stroke-width="5.5" opacity="0.8"/><path d="M 59.3 57.3 A 12.5 12.5 0 1 1 55.2 41.8" stroke-width="4.5" opacity="0.6"/></g><g fill="#FFFFFF"><circle cx="48" cy="52" r="3.5"/><circle cx="62" cy="27" r="2.5" opacity="0.6"/><circle cx="72" cy="24" r="3.5"/><circle cx="82" cy="20" r="6.5"/></g></svg></div>
+                <div class="tile tile-dark"><svg viewBox="0 0 100 100"><g fill="none" stroke="#FFFFFF" stroke-linecap="round"><path d="M 77.9 49.4 A 30 30 0 1 1 50.6 22.1" stroke-width="6.5"/><path d="M 68.7 55.6 A 21 21 0 1 1 55.2 32.3" stroke-width="5.5" opacity="0.8"/><path d="M 59.3 57.3 A 12.5 12.5 0 1 1 55.2 41.8" stroke-width="4.5" opacity="0.6"/></g><g fill="#FFFFFF"><circle cx="48" cy="52" r="3.5"/><circle cx="62" cy="27" r="2.5" opacity="0.6"/><circle cx="72" cy="24" r="3.5"/><circle cx="82" cy="20" r="6.5"/></g></svg></div>
+            </div>
+            <div style="text-align:center; width:100%; padding:0 16px;">
+                <h2 style="font-size:20px; font-weight:500; letter-spacing:0.08em; margin-bottom:8px; text-transform:uppercase;">涡旋尾流 Vortex</h2>
+                <h3 class="font-mono" style="font-size:12px; opacity:0.5; letter-spacing:0.15em; margin-bottom:24px;">线条系统 · 嵌套涡旋</h3>
+                <p style="font-size:14px; line-height:1.8; opacity:0.7; text-align:left; font-weight:300;" class="text-balance">
+                    三层嵌套弧卷成漩涡,流量被卷入内核,再从右上缺口甩出一串彗尾。层层递进的弧宽制造出旋转的深度感,动感与复杂度兼备。
+                </p>
+            </div>
+            <div class="divider-line" style="margin-top:32px;"></div>
+        </div>
+
+        <!-- v8 orbital badge -->
+        <div class="logo-card" style="display:flex; flex-direction:column; align-items:center; cursor:pointer;">
+            <div style="width:256px; height:256px; margin-bottom:40px; display:flex; align-items:center; justify-content:center; position:relative;">
+                <div class="logo-aura"></div>
+                <div class="logo-canvas" style="width:128px; height:128px; z-index:1;">
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="50" cy="50" r="42" fill="none" stroke="#1A69BC" stroke-width="2"/>
+                        <circle cx="50" cy="50" r="33" fill="none" stroke="#1A69BC" stroke-width="1.2" stroke-dasharray="3 5" opacity="0.4"/>
+                        <path d="M 24 66 A 40 40 0 0 1 66 24" fill="none" stroke="#1A69BC" stroke-width="2" stroke-linecap="round" opacity="0.45"/>
+                        <path d="M 36 64 A 28 28 0 0 1 64 36" fill="none" stroke="#1A69BC" stroke-width="8.5" stroke-linecap="round"/>
+                        <circle cx="64" cy="36" r="6.5" fill="#003F8F"/>
+                        <circle cx="79.7" cy="20.3" r="2.5" fill="#78A8E2"/>
+                        <circle cx="20.3" cy="79.7" r="2.5" fill="#78A8E2"/>
+                    </svg>
+                </div>
+            </div>
+            <div class="tile-strip">
+                <div class="tile tile-light"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="42" fill="none" stroke="#1A69BC" stroke-width="2"/><circle cx="50" cy="50" r="33" fill="none" stroke="#1A69BC" stroke-width="1.2" stroke-dasharray="3 5" opacity="0.4"/><path d="M 24 66 A 40 40 0 0 1 66 24" fill="none" stroke="#1A69BC" stroke-width="2" stroke-linecap="round" opacity="0.45"/><path d="M 36 64 A 28 28 0 0 1 64 36" fill="none" stroke="#1A69BC" stroke-width="8.5" stroke-linecap="round"/><circle cx="64" cy="36" r="6.5" fill="#003F8F"/><circle cx="79.7" cy="20.3" r="2.5" fill="#78A8E2"/><circle cx="20.3" cy="79.7" r="2.5" fill="#78A8E2"/></svg></div>
+                <div class="tile tile-brand"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="42" fill="none" stroke="#FFFFFF" stroke-width="2"/><circle cx="50" cy="50" r="33" fill="none" stroke="#FFFFFF" stroke-width="1.2" stroke-dasharray="3 5" opacity="0.4"/><path d="M 24 66 A 40 40 0 0 1 66 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" opacity="0.45"/><path d="M 36 64 A 28 28 0 0 1 64 36" fill="none" stroke="#FFFFFF" stroke-width="8.5" stroke-linecap="round"/><circle cx="64" cy="36" r="6.5" fill="#FFFFFF"/><circle cx="79.7" cy="20.3" r="2.5" fill="#FFFFFF"/><circle cx="20.3" cy="79.7" r="2.5" fill="#FFFFFF"/></svg></div>
+                <div class="tile tile-dark"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="42" fill="none" stroke="#FFFFFF" stroke-width="2"/><circle cx="50" cy="50" r="33" fill="none" stroke="#FFFFFF" stroke-width="1.2" stroke-dasharray="3 5" opacity="0.4"/><path d="M 24 66 A 40 40 0 0 1 66 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" opacity="0.45"/><path d="M 36 64 A 28 28 0 0 1 64 36" fill="none" stroke="#FFFFFF" stroke-width="8.5" stroke-linecap="round"/><circle cx="64" cy="36" r="6.5" fill="#FFFFFF"/><circle cx="79.7" cy="20.3" r="2.5" fill="#FFFFFF"/><circle cx="20.3" cy="79.7" r="2.5" fill="#FFFFFF"/></svg></div>
+            </div>
+            <div style="text-align:center; width:100%; padding:0 16px;">
+                <h2 style="font-size:20px; font-weight:500; letter-spacing:0.08em; margin-bottom:8px; text-transform:uppercase;">轨道徽章 Orbital Badge</h2>
+                <h3 class="font-mono" style="font-size:12px; opacity:0.5; letter-spacing:0.15em; margin-bottom:24px;">徽章系统 · 双环 + 肘弯</h3>
+                <p style="font-size:14px; line-height:1.8; opacity:0.7; text-align:left; font-weight:300;" class="text-balance">
+                    实线外环、虚线中环与双层彗尾肘弯构成完整徽章。深色彗首是全场焦点,两颗浅色卫星点缀在轨道上,仪式感与完成度最高。
+                </p>
+            </div>
+            <div class="divider-line" style="margin-top:32px;"></div>
+        </div>
+
+        <!-- v9 braid -->
+        <div class="logo-card" style="display:flex; flex-direction:column; align-items:center; cursor:pointer;">
+            <div style="width:256px; height:256px; margin-bottom:40px; display:flex; align-items:center; justify-content:center; position:relative;">
+                <div class="logo-aura"></div>
+                <div class="logo-canvas" style="width:128px; height:128px; z-index:1;">
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <g fill="none" stroke-linecap="round">
+                            <path d="M 18 42 C 34 42, 34 66, 50 66 C 66 66, 66 42, 82 42" stroke="#78A8E2" stroke-width="4.5"/>
+                            <path d="M 18 58 C 34 58, 34 34, 50 34 C 66 34, 66 58, 82 58" stroke="#1A69BC" stroke-width="6.5"/>
+                        </g>
+                        <circle cx="82" cy="58" r="6" fill="#003F8F"/>
+                        <circle cx="82" cy="42" r="3.5" fill="#1A69BC" opacity="0.6"/>
+                        <circle cx="89" cy="63" r="2" fill="#1A69BC" opacity="0.5"/>
+                    </svg>
+                </div>
+            </div>
+            <div class="tile-strip">
+                <div class="tile tile-light"><svg viewBox="0 0 100 100"><g fill="none" stroke-linecap="round"><path d="M 18 42 C 34 42, 34 66, 50 66 C 66 66, 66 42, 82 42" stroke="#78A8E2" stroke-width="4.5"/><path d="M 18 58 C 34 58, 34 34, 50 34 C 66 34, 66 58, 82 58" stroke="#1A69BC" stroke-width="6.5"/></g><circle cx="82" cy="58" r="6" fill="#003F8F"/><circle cx="82" cy="42" r="3.5" fill="#1A69BC" opacity="0.6"/><circle cx="89" cy="63" r="2" fill="#1A69BC" opacity="0.5"/></svg></div>
+                <div class="tile tile-brand"><svg viewBox="0 0 100 100"><g fill="none" stroke-linecap="round"><path d="M 18 42 C 34 42, 34 66, 50 66 C 66 66, 66 42, 82 42" stroke="#FFFFFF" stroke-width="4.5" opacity="0.65"/><path d="M 18 58 C 34 58, 34 34, 50 34 C 66 34, 66 58, 82 58" stroke="#FFFFFF" stroke-width="6.5"/></g><circle cx="82" cy="58" r="6" fill="#FFFFFF"/><circle cx="82" cy="42" r="3.5" fill="#FFFFFF" opacity="0.7"/><circle cx="89" cy="63" r="2" fill="#FFFFFF" opacity="0.6"/></svg></div>
+                <div class="tile tile-dark"><svg viewBox="0 0 100 100"><g fill="none" stroke-linecap="round"><path d="M 18 42 C 34 42, 34 66, 50 66 C 66 66, 66 42, 82 42" stroke="#FFFFFF" stroke-width="4.5" opacity="0.65"/><path d="M 18 58 C 34 58, 34 34, 50 34 C 66 34, 66 58, 82 58" stroke="#FFFFFF" stroke-width="6.5"/></g><circle cx="82" cy="58" r="6" fill="#FFFFFF"/><circle cx="82" cy="42" r="3.5" fill="#FFFFFF" opacity="0.7"/><circle cx="89" cy="63" r="2" fill="#FFFFFF" opacity="0.6"/></svg></div>
+            </div>
+            <div style="text-align:center; width:100%; padding:0 16px;">
+                <h2 style="font-size:20px; font-weight:500; letter-spacing:0.08em; margin-bottom:8px; text-transform:uppercase;">双绞尾流 Braid</h2>
+                <h3 class="font-mono" style="font-size:12px; opacity:0.5; letter-spacing:0.15em; margin-bottom:24px;">线条系统 · 双流绞缠</h3>
+                <p style="font-size:14px; line-height:1.8; opacity:0.7; text-align:left; font-weight:300;" class="text-balance">
+                    两条粗细不一的流线两次交错绞成辫,末端各凝出一颗节点——像两条链路彼此缠绕同步。浅色副线与深色彗首构成三阶色层。
+                </p>
+            </div>
+            <div class="divider-line" style="margin-top:32px;"></div>
+        </div>
+
+        <!-- v10 globe route -->
+        <div class="logo-card" style="display:flex; flex-direction:column; align-items:center; cursor:pointer;">
+            <div style="width:256px; height:256px; margin-bottom:40px; display:flex; align-items:center; justify-content:center; position:relative;">
+                <div class="logo-aura"></div>
+                <div class="logo-canvas" style="width:128px; height:128px; z-index:1;">
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <g fill="none" stroke="#1A69BC">
+                            <circle cx="47" cy="53" r="26" stroke-width="2.5"/>
+                            <ellipse cx="47" cy="53" rx="26" ry="10" stroke-width="1.5" opacity="0.45"/>
+                            <ellipse cx="47" cy="53" rx="26" ry="19" stroke-width="1.2" opacity="0.25"/>
+                            <ellipse cx="47" cy="53" rx="10" ry="26" stroke-width="1.5" opacity="0.45"/>
+                            <ellipse cx="47" cy="53" rx="19" ry="26" stroke-width="1.2" opacity="0.25"/>
+                        </g>
+                        <path d="M 23 77 A 34 34 0 1 1 78.9 41.4" fill="none" stroke="#1A69BC" stroke-width="7" stroke-linecap="round"/>
+                        <circle cx="78.9" cy="41.4" r="6.5" fill="#003F8F"/>
+                        <circle cx="87" cy="33" r="3" fill="#1A69BC" opacity="0.6"/>
+                    </svg>
+                </div>
+            </div>
+            <div class="tile-strip">
+                <div class="tile tile-light"><svg viewBox="0 0 100 100"><g fill="none" stroke="#1A69BC"><circle cx="47" cy="53" r="26" stroke-width="2.5"/><ellipse cx="47" cy="53" rx="26" ry="10" stroke-width="1.5" opacity="0.45"/><ellipse cx="47" cy="53" rx="26" ry="19" stroke-width="1.2" opacity="0.25"/><ellipse cx="47" cy="53" rx="10" ry="26" stroke-width="1.5" opacity="0.45"/><ellipse cx="47" cy="53" rx="19" ry="26" stroke-width="1.2" opacity="0.25"/></g><path d="M 23 77 A 34 34 0 1 1 78.9 41.4" fill="none" stroke="#1A69BC" stroke-width="7" stroke-linecap="round"/><circle cx="78.9" cy="41.4" r="6.5" fill="#003F8F"/><circle cx="87" cy="33" r="3" fill="#1A69BC" opacity="0.6"/></svg></div>
+                <div class="tile tile-brand"><svg viewBox="0 0 100 100"><g fill="none" stroke="#FFFFFF"><circle cx="47" cy="53" r="26" stroke-width="2.5"/><ellipse cx="47" cy="53" rx="26" ry="10" stroke-width="1.5" opacity="0.45"/><ellipse cx="47" cy="53" rx="26" ry="19" stroke-width="1.2" opacity="0.25"/><ellipse cx="47" cy="53" rx="10" ry="26" stroke-width="1.5" opacity="0.45"/><ellipse cx="47" cy="53" rx="19" ry="26" stroke-width="1.2" opacity="0.25"/></g><path d="M 23 77 A 34 34 0 1 1 78.9 41.4" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/><circle cx="78.9" cy="41.4" r="6.5" fill="#FFFFFF"/><circle cx="87" cy="33" r="3" fill="#FFFFFF" opacity="0.6"/></svg></div>
+                <div class="tile tile-dark"><svg viewBox="0 0 100 100"><g fill="none" stroke="#FFFFFF"><circle cx="47" cy="53" r="26" stroke-width="2.5"/><ellipse cx="47" cy="53" rx="26" ry="10" stroke-width="1.5" opacity="0.45"/><ellipse cx="47" cy="53" rx="26" ry="19" stroke-width="1.2" opacity="0.25"/><ellipse cx="47" cy="53" rx="10" ry="26" stroke-width="1.5" opacity="0.45"/><ellipse cx="47" cy="53" rx="19" ry="26" stroke-width="1.2" opacity="0.25"/></g><path d="M 23 77 A 34 34 0 1 1 78.9 41.4" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/><circle cx="78.9" cy="41.4" r="6.5" fill="#FFFFFF"/><circle cx="87" cy="33" r="3" fill="#FFFFFF" opacity="0.6"/></svg></div>
+            </div>
+            <div style="text-align:center; width:100%; padding:0 16px;">
+                <h2 style="font-size:20px; font-weight:500; letter-spacing:0.08em; margin-bottom:8px; text-transform:uppercase;">星球航线 Globe Route</h2>
+                <h3 class="font-mono" style="font-size:12px; opacity:0.5; letter-spacing:0.15em; margin-bottom:24px;">线条 + 几何 · 线框星球</h3>
+                <p style="font-size:14px; line-height:1.8; opacity:0.7; text-align:left; font-weight:300;" class="text-balance">
+                    双纬双经的线框星球,一条粗壮航线贴着球面环绕大半圈,出口节点刚飞离地表。全球化代理网络的隐喻最直白,信息量饱满。
+                </p>
+            </div>
+            <div class="divider-line" style="margin-top:32px;"></div>
+        </div>
+
+        <!-- v11 data pulse -->
+        <div class="logo-card" style="display:flex; flex-direction:column; align-items:center; cursor:pointer;">
+            <div style="width:256px; height:256px; margin-bottom:40px; display:flex; align-items:center; justify-content:center; position:relative;">
+                <div class="logo-aura"></div>
+                <div class="logo-canvas" style="width:128px; height:128px; z-index:1;">
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <g fill="none" stroke="#1A69BC" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M 16 29 L 40 29 Q 48 29 48 37 L 48 45 Q 48 53 56 53 L 62 53 C 70 53 76 58 76 66" stroke-width="4.5"/>
+                            <path d="M 16 39 L 36 39 Q 42 39 42 45 L 42 49 Q 42 55 48 55 L 54 55 C 60 55 65 59 65 65" stroke-width="3" opacity="0.4"/>
+                        </g>
+                        <g fill="#1A69BC">
+                            <circle cx="16" cy="29" r="3"/>
+                            <circle cx="48" cy="45" r="2.5" opacity="0.8"/>
+                            <circle cx="16" cy="39" r="2.5" opacity="0.6"/>
+                        </g>
+                        <circle cx="76" cy="72" r="5.5" fill="#003F8F"/>
+                        <circle cx="65" cy="70" r="3" fill="#1A69BC" opacity="0.5"/>
+                    </svg>
+                </div>
+            </div>
+            <div class="tile-strip">
+                <div class="tile tile-light"><svg viewBox="0 0 100 100"><g fill="none" stroke="#1A69BC" stroke-linecap="round" stroke-linejoin="round"><path d="M 16 29 L 40 29 Q 48 29 48 37 L 48 45 Q 48 53 56 53 L 62 53 C 70 53 76 58 76 66" stroke-width="4.5"/><path d="M 16 39 L 36 39 Q 42 39 42 45 L 42 49 Q 42 55 48 55 L 54 55 C 60 55 65 59 65 65" stroke-width="3" opacity="0.4"/></g><g fill="#1A69BC"><circle cx="16" cy="29" r="3"/><circle cx="48" cy="45" r="2.5" opacity="0.8"/><circle cx="16" cy="39" r="2.5" opacity="0.6"/></g><circle cx="76" cy="72" r="5.5" fill="#003F8F"/><circle cx="65" cy="70" r="3" fill="#1A69BC" opacity="0.5"/></svg></div>
+                <div class="tile tile-brand"><svg viewBox="0 0 100 100"><g fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round"><path d="M 16 29 L 40 29 Q 48 29 48 37 L 48 45 Q 48 53 56 53 L 62 53 C 70 53 76 58 76 66" stroke-width="4.5"/><path d="M 16 39 L 36 39 Q 42 39 42 45 L 42 49 Q 42 55 48 55 L 54 55 C 60 55 65 59 65 65" stroke-width="3" opacity="0.4"/></g><g fill="#FFFFFF"><circle cx="16" cy="29" r="3"/><circle cx="48" cy="45" r="2.5" opacity="0.8"/><circle cx="16" cy="39" r="2.5" opacity="0.6"/></g><circle cx="76" cy="72" r="5.5" fill="#FFFFFF"/><circle cx="65" cy="70" r="3" fill="#FFFFFF" opacity="0.5"/></svg></div>
+                <div class="tile tile-dark"><svg viewBox="0 0 100 100"><g fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-linejoin="round"><path d="M 16 29 L 40 29 Q 48 29 48 37 L 48 45 Q 48 53 56 53 L 62 53 C 70 53 76 58 76 66" stroke-width="4.5"/><path d="M 16 39 L 36 39 Q 42 39 42 45 L 42 49 Q 42 55 48 55 L 54 55 C 60 55 65 59 65 65" stroke-width="3" opacity="0.4"/></g><g fill="#FFFFFF"><circle cx="16" cy="29" r="3"/><circle cx="48" cy="45" r="2.5" opacity="0.8"/><circle cx="16" cy="39" r="2.5" opacity="0.6"/></g><circle cx="76" cy="72" r="5.5" fill="#FFFFFF"/><circle cx="65" cy="70" r="3" fill="#FFFFFF" opacity="0.5"/></svg></div>
+            </div>
+            <div style="text-align:center; width:100%; padding:0 16px;">
+                <h2 style="font-size:20px; font-weight:500; letter-spacing:0.08em; margin-bottom:8px; text-transform:uppercase;">数据脉冲 Data Pulse</h2>
+                <h3 class="font-mono" style="font-size:12px; opacity:0.5; letter-spacing:0.15em; margin-bottom:24px;">线条系统 · 电路走线</h3>
+                <p style="font-size:14px; line-height:1.8; opacity:0.7; text-align:left; font-weight:300;" class="text-balance">
+                    主从两条圆角走线如电路布线,转角与起点缀有节点铆点,末端甩出彗首。工程感与秩序感并存,暗合"规则分流"的产品气质。
+                </p>
+            </div>
+            <div class="divider-line" style="margin-top:32px;"></div>
+        </div>
+
+        <!-- v12 monogram emblem -->
+        <div class="logo-card" style="display:flex; flex-direction:column; align-items:center; cursor:pointer;">
+            <div style="width:256px; height:256px; margin-bottom:40px; display:flex; align-items:center; justify-content:center; position:relative;">
+                <div class="logo-aura"></div>
+                <div class="logo-canvas" style="width:128px; height:128px; z-index:1;">
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="14" y="14" width="72" height="72" rx="20" fill="none" stroke="#1A69BC" stroke-width="2.5"/>
+                        <rect x="21" y="21" width="58" height="58" rx="14" fill="none" stroke="#1A69BC" stroke-width="1" opacity="0.35"/>
+                        <g fill="none" stroke="#1A69BC" stroke-width="6" stroke-linecap="round">
+                            <path d="M 38 44 L 62 44"/>
+                            <path d="M 50 28 L 50 55 C 50 62, 55 66, 62 66"/>
+                        </g>
+                        <circle cx="70" cy="68" r="2.5" fill="#78A8E2"/>
+                        <circle cx="66" cy="31" r="2.5" fill="#78A8E2" opacity="0.8"/>
+                        <circle cx="71" cy="26" r="1.8" fill="#78A8E2" opacity="0.5"/>
+                    </svg>
+                </div>
+            </div>
+            <div class="tile-strip">
+                <div class="tile tile-light"><svg viewBox="0 0 100 100"><rect x="14" y="14" width="72" height="72" rx="20" fill="none" stroke="#1A69BC" stroke-width="2.5"/><rect x="21" y="21" width="58" height="58" rx="14" fill="none" stroke="#1A69BC" stroke-width="1" opacity="0.35"/><g fill="none" stroke="#1A69BC" stroke-width="6" stroke-linecap="round"><path d="M 38 44 L 62 44"/><path d="M 50 28 L 50 55 C 50 62, 55 66, 62 66"/></g><circle cx="70" cy="68" r="2.5" fill="#78A8E2"/><circle cx="66" cy="31" r="2.5" fill="#78A8E2" opacity="0.8"/><circle cx="71" cy="26" r="1.8" fill="#78A8E2" opacity="0.5"/></svg></div>
+                <div class="tile tile-brand"><svg viewBox="0 0 100 100"><rect x="14" y="14" width="72" height="72" rx="20" fill="none" stroke="#FFFFFF" stroke-width="2.5"/><rect x="21" y="21" width="58" height="58" rx="14" fill="none" stroke="#FFFFFF" stroke-width="1" opacity="0.35"/><g fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"><path d="M 38 44 L 62 44"/><path d="M 50 28 L 50 55 C 50 62, 55 66, 62 66"/></g><circle cx="70" cy="68" r="2.5" fill="#FFFFFF"/><circle cx="66" cy="31" r="2.5" fill="#FFFFFF" opacity="0.8"/><circle cx="71" cy="26" r="1.8" fill="#FFFFFF" opacity="0.5"/></svg></div>
+                <div class="tile tile-dark"><svg viewBox="0 0 100 100"><rect x="14" y="14" width="72" height="72" rx="20" fill="none" stroke="#FFFFFF" stroke-width="2.5"/><rect x="21" y="21" width="58" height="58" rx="14" fill="none" stroke="#FFFFFF" stroke-width="1" opacity="0.35"/><g fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"><path d="M 38 44 L 62 44"/><path d="M 50 28 L 50 55 C 50 62, 55 66, 62 66"/></g><circle cx="70" cy="68" r="2.5" fill="#FFFFFF"/><circle cx="66" cy="31" r="2.5" fill="#FFFFFF" opacity="0.8"/><circle cx="71" cy="26" r="1.8" fill="#FFFFFF" opacity="0.5"/></svg></div>
+            </div>
+            <div style="text-align:center; width:100%; padding:0 16px;">
+                <h2 style="font-size:20px; font-weight:500; letter-spacing:0.08em; margin-bottom:8px; text-transform:uppercase;">徽章 t Monogram Emblem</h2>
+                <h3 class="font-mono" style="font-size:12px; opacity:0.5; letter-spacing:0.15em; margin-bottom:24px;">徽章 + 字母 · 单字标</h3>
+                <p style="font-size:14px; line-height:1.8; opacity:0.7; text-align:left; font-weight:300;" class="text-balance">
+                    双层圆角方徽内嵌几何 t,尾锋带卫星点,角部缀彗尾点缀。整体本身就是一枚"应用图标",品牌识别最完整。
+                </p>
+            </div>
+            <div class="divider-line" style="margin-top:32px;"></div>
+        </div>
+
+    </div>
+
+    <!-- Footer -->
+    <div style="margin-top:96px; max-width:640px; text-align:center;">
+        <p class="font-mono" style="font-size:12px; opacity:0.4; text-transform:uppercase; letter-spacing:0.2em; line-height:2;">
+            Generated with Logo Generator<br>
+            Brand Color #1A69BC · oklch(52% 0.15 254) · 2026
+        </p>
+    </div>
+
+</div>
+
+</body>
+</html>

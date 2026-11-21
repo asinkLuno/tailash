@@ -1,0 +1,14 @@
+<!-- tailash v7「涡旋尾流」:三层嵌套弧构成的漩涡,流量卷入内核后从右上缺口甩出一串彗尾 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <g fill="none" stroke="#1A69BC" stroke-linecap="round">
+    <path d="M 77.9 49.4 A 30 30 0 1 1 50.6 22.1" stroke-width="6.5"/>
+    <path d="M 68.7 55.6 A 21 21 0 1 1 55.2 32.3" stroke-width="5.5" opacity="0.8"/>
+    <path d="M 59.3 57.3 A 12.5 12.5 0 1 1 55.2 41.8" stroke-width="4.5" opacity="0.6"/>
+  </g>
+  <circle cx="48" cy="52" r="3.5" fill="#1A69BC"/>
+  <g fill="#1A69BC">
+    <circle cx="62" cy="27" r="2.5" opacity="0.6"/>
+    <circle cx="72" cy="24" r="3.5"/>
+    <circle cx="82" cy="20" r="6.5" fill="#003F8F"/>
+  </g>
+</svg>
