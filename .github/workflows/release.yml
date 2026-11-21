@@ -1,0 +1,180 @@
+name: Release
+
+# 推送到 release 分支即发版：校验（fmt/clippy/test）→ release 构建 → 打包 tar.gz →
+# 发布 GitHub Release（tar.gz 二进制包 + pacman .pkg.tar.zst 包）
+# 本地用法：git push origin HEAD:release
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 生成 release notes 需要历史与 tag
+
+      # GPUI 在 Linux 上链接 xkbcommon / wayland / xcb / fontconfig
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libxkbcommon-dev libxkbcommon-x11-dev libfontconfig1-dev \
+            libwayland-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libvulkan-dev mesa-vulkan-drivers fonts-dejavu-core
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --all-targets --locked
+
+      - name: Build (release)
+        run: cargo build --release --locked
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          name="tailash-${version}-linux-x86_64"
+          mkdir -p "dist/${name}"
+
+          # 不内置 mihomo 内核：用户自行下载并放进 PATH
+          strip target/release/tailash
+          cp target/release/tailash "dist/${name}/tailash"
+          cp README.md "dist/${name}/README.md"
+          cp LICENSE "dist/${name}/LICENSE"
+          cat > "dist/${name}/install.sh" <<'INSTALL'
+          #!/usr/bin/env bash
+          # 安装 tailash。mihomo 内核不随包分发，需自行下载并放进 PATH。
+          set -euo pipefail
+          here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          prefix="${PREFIX:-$HOME/.local/bin}"
+          mkdir -p "$prefix"
+          install -m 755 "$here/tailash" "$prefix/tailash"
+          echo "已安装: $prefix/tailash"
+          if ! command -v mihomo >/dev/null; then
+            echo "未找到 mihomo 内核：请从 https://github.com/MetaCubeX/mihomo/releases 下载，"
+            echo "命名为 mihomo、加可执行权限后放进 PATH（如 $prefix/mihomo）"
+          fi
+          echo "运行: $prefix/tailash"
+          INSTALL
+          chmod +x "dist/${name}/install.sh"
+
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          ( cd dist && sha256sum "${name}.tar.gz" > SHA256SUMS.txt )
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          tag="v${version}"
+          # 同一版本重复触发 release 分支时不移动已有 tag，用构建号区分
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            tag="v${version}-build.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Pack Arch pacman package
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          sum="$(sha256sum "dist/tailash-${VERSION}-linux-x86_64.tar.gz" | cut -d' ' -f1)"
+          work="$(mktemp -d)"
+          cp "dist/tailash-${VERSION}-linux-x86_64.tar.gz" "$work/"
+          cp PKGBUILD "$work/"
+          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" "$work/PKGBUILD"
+          sed -i "s/^sha256sums=.*/sha256sums=('${sum}')/" "$work/PKGBUILD"
+          # 官方 Arch 容器里由非 root 用户跑 makepkg，产出 tailash-*-x86_64.pkg.tar.zst
+          docker run --rm -v "$work:/pkg" -w /pkg archlinux:base-devel \
+            bash -c 'pacman -Syu --noconfirm >/dev/null && useradd -m build \
+                     && chown -R build:build /pkg \
+                     && su build -s /bin/bash -c "makepkg -f --noconfirm"'
+          mv "$work"/tailash-*.pkg.tar.zst dist/
+          # 校验和文件同时覆盖 tar.gz 与 pacman 包
+          ( cd dist && sha256sum tailash-*.pkg.tar.zst >> SHA256SUMS.txt )
+
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          prev="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          {
+            echo "## 安装"
+            echo
+            echo '### Arch（pacman 包）'
+            echo
+            echo '```bash'
+            echo 'sudo pacman -U tailash-*-x86_64.pkg.tar.zst   # 装到 /usr/bin/tailash'
+            echo '```'
+            echo
+            echo '### 通用（tar.gz）'
+            echo
+            echo '```bash'
+            echo 'tar xzf tailash-*-linux-x86_64.tar.gz'
+            echo 'cd tailash-*-linux-x86_64 && ./install.sh   # 装到 ~/.local/bin'
+            echo '```'
+            echo
+            echo '发行包不含 mihomo 内核：Arch 直接 `paru -S mihomo`（内核 + GeoIP 一步到位），'
+            echo '其它发行版从 https://github.com/MetaCubeX/mihomo/releases 下载，'
+            echo '命名为 `mihomo`、加可执行权限后放进 PATH（如 `~/.local/bin/mihomo`）。'
+            echo
+            echo 'TUN 模式需要内核持有 `cap_net_admin`：在界面点「授权 TUN」，或手动'
+            echo '`sudo setcap cap_net_admin=ep <mihomo 路径>`；替换内核文件后需重新授权。'
+            echo
+            echo "## 运行依赖"
+            echo
+            echo '```bash'
+            echo 'sudo apt-get install -y libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libwayland-client0 libxcb1 libvulkan1 libcap2-bin'
+            echo '```'
+            echo
+            echo '## 源码（GPL-3.0）'
+            echo
+            echo '对应本二进制的源码：仓库 tag `'"${TAG}"'`（<https://github.com/asinkLuno/tailash>）。'
+            echo
+            echo '## 变更'
+            echo
+            if [ -n "$prev" ]; then
+              git log --no-merges --pretty='- %s' "${prev}..HEAD"
+            else
+              git log --no-merges --pretty='- %s' -20 HEAD
+            fi
+          } > /tmp/notes.md
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "tailash $VERSION" \
+            --notes-file /tmp/notes.md \
+            dist/*.tar.gz dist/*.pkg.tar.zst dist/SHA256SUMS.txt
+

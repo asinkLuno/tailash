@@ -1,0 +1,6 @@
+target/
+bin/mihomo
+*.mmdb
+*.dat
+.agents/
+dist/
