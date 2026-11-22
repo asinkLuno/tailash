@@ -180,15 +180,24 @@ pub fn spawn_worker(
                     // pkexec 要等用户在授权窗里操作，放到线程里，别卡住 poll 与其它命令。
                     set_snap(&snapshot, |snap| snap.message = "等待授权…".into());
                     let snapshot = snapshot.clone();
+                    let workdir = cfg.workdir.clone();
                     std::thread::spawn(move || {
                         let granted = crate::backend::runtime::find_mihomo().and_then(|binary| {
                             crate::backend::runtime::grant_cap_net_admin(&binary)
                         });
+                        // 已经在跑的内核拿不到新授权（file caps 只在 exec 时生效），重启一次让它带上
+                        let restarted = granted.is_ok()
+                            && crate::backend::runtime::service_active()
+                            && crate::backend::runtime::service_stop().is_ok()
+                            && crate::backend::runtime::service_start(&workdir).is_ok();
                         set_snap(&snapshot, |snap| match granted {
                             Ok(()) => {
                                 snap.cap_missing = false;
-                                snap.message =
-                                    "已授权；若内核正在运行，停止后重新启动即可生效".into();
+                                snap.message = if restarted {
+                                    "已授权并重启内核，TUN 现在可用".into()
+                                } else {
+                                    "已授权；若内核正在运行，停止后重新启动即可生效".into()
+                                };
                             }
                             Err(e) => snap.message = format!("授权失败: {e:#}"),
                         });
@@ -197,10 +206,21 @@ pub fn spawn_worker(
                 UiCmd::ToggleTun(on) => {
                     if let Some(client) = &core {
                         match client.set_tun(on) {
-                            Ok(_) => set_snap(&snapshot, |snap| {
-                                snap.tun_enabled = on;
-                                snap.message = if on { "TUN 已开启" } else { "TUN 已关闭" }.into();
-                            }),
+                            Ok(_) => {
+                                // 建卡是内核侧的同步动作，失败只写日志不回 HTTP，所以立刻看实际网卡
+                                let up = !on || crate::backend::runtime::tun_interface_up(None);
+                                set_snap(&snapshot, |snap| {
+                                    snap.tun_enabled = on && up;
+                                    snap.message = match (on, up) {
+                                        (false, _) => "TUN 已关闭".into(),
+                                        (true, true) => "TUN 已开启".into(),
+                                        (true, false) => {
+                                            "TUN 开启失败：内核可能还没有 cap_net_admin，重启内核后重试"
+                                                .into()
+                                        }
+                                    };
+                                });
+                            }
                             Err(e) => {
                                 let msg = format!("TUN 切换失败: {e}");
                                 set_snap(&snapshot, |snap| snap.message = msg);
@@ -864,7 +884,9 @@ impl CoreLink {
                 return;
             }
         };
-        let tun = config["tun"]["enable"].as_bool().unwrap_or(false);
+        // enable 只是期望值，建卡失败只写日志，得配上网卡是否真的存在
+        let tun = config["tun"]["enable"].as_bool().unwrap_or(false)
+            && crate::backend::runtime::tun_interface_up(config["tun"]["device"].as_str());
         let mode = config["mode"]
             .as_str()
             .and_then(crate::backend::mihomo_api::ProxyMode::parse);

@@ -109,7 +109,8 @@ pub fn generate(profile: &Value, socket_path: &str, tun_enabled: bool) -> Result
     }
 
     // ---- external controller：unix socket，供 GUI 控制 ----
-    cfg["external-controller"] = Value::String(format!("unix://{socket_path}"));
+    // mihomo 1.19 起不认 `external-controller: unix://…`（会报 invalid network address），
+    // unix socket 只走 external-controller-unix 这一个键。
     cfg["external-controller-unix"] = Value::String(socket_path.to_string());
     // GUI 不带 secret 访问 API；订阅里自带的 secret 会把 GUI 挡在外面，去掉。
     if let Some(map) = cfg.as_mapping_mut() {

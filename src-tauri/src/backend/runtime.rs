@@ -116,6 +116,14 @@ pub fn has_cap_net_admin(binary: &std::path::Path) -> bool {
     }
 }
 
+/// TUN 网卡是否真的建起来了。`/configs` 里的 `tun.enable` 只是期望值，
+/// 建卡失败（例如内核没 cap_net_admin）只写日志、不回错误，所以得看内核网卡列表。
+/// shortcut: 只认 tun.device 或 mihomo 默认名 Meta，别处的同名网卡会误判。
+pub fn tun_interface_up(device: Option<&str>) -> bool {
+    let name = device.filter(|name| !name.is_empty()).unwrap_or("Meta");
+    std::path::Path::new("/sys/class/net").join(name).exists()
+}
+
 /// systemd 用户服务的单元名与 `~/.config/systemd/user` 下的单元文件路径。
 pub const SERVICE_UNIT: &str = "tailash-mihomo.service";
 
@@ -306,5 +314,18 @@ mod find_mihomo_tests {
         );
         std::fs::remove_dir_all(link_dir).unwrap();
         std::fs::remove_dir_all(real).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tun_interface_tests {
+    use super::*;
+
+    #[test]
+    fn blank_device_falls_back_to_meta_and_unknown_names_are_down() {
+        let meta = std::path::Path::new("/sys/class/net/Meta").exists();
+        assert_eq!(tun_interface_up(None), meta);
+        assert_eq!(tun_interface_up(Some("")), meta);
+        assert!(!tun_interface_up(Some("tailash-no-such-if")));
     }
 }
