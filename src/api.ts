@@ -38,12 +38,30 @@ export interface SubStatus {
   updatedAt: number | null;
 }
 
+export interface TrafficSample {
+  /** 当前上传速率（字节/秒） */
+  up: number;
+  /** 当前下载速率（字节/秒） */
+  down: number;
+  /** 累计上传（字节） */
+  upTotal: number;
+  /** 累计下载（字节） */
+  downTotal: number;
+}
+
+export interface TrafficPoint {
+  up: number;
+  down: number;
+}
+
 export interface Snapshot {
   coreRunning: boolean;
   capMissing: boolean;
   systemdAvailable: boolean;
   mode: ProxyMode;
   tunEnabled: boolean;
+  traffic: TrafficSample;
+  trafficHistory: TrafficPoint[];
   view: ProxyView;
   subs: SubStatus[];
   /** 单点测速进行中的节点名 */
@@ -75,6 +93,8 @@ const emptySnapshot: Snapshot = {
   systemdAvailable: false,
   mode: "rule",
   tunEnabled: false,
+  traffic: { up: 0, down: 0, upTotal: 0, downTotal: 0 },
+  trafficHistory: [],
   view: { nodes: [], groups: [] },
   subs: [],
   testing: [],

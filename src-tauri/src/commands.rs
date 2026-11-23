@@ -21,7 +21,7 @@ pub struct AppState {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Cmd {
-    /// 经 systemd 用户服务启动/停止内核
+    /// 启动/停止内核（优先 systemd 用户服务，无 systemd 时直接管理后台进程）
     ToggleCore,
     /// mihomo 缺 cap_net_admin 时经 pkexec 补授权
     GrantCap,

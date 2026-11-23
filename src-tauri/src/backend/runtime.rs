@@ -1,8 +1,10 @@
-//! 运行时约定：tailash 生成配置，经 systemd 用户服务（或用户自己在终端）启动的 mihomo 内核读取它。
+//! 运行时约定：tailash 生成配置，优先经 systemd 用户服务启动 mihomo；
+//! 无 systemd 用户实例时，直接以脱离会话的后台进程方式管理 mihomo（退出 GUI 不受影响）。
 //!
 //! 约定的位置都在数据目录（workdir）下：
 //! - `config.yaml`：由订阅生成，内核以 `mihomo -d <workdir> -f <workdir>/config.yaml` 启动；
-//! - `mihomo.sock`：配置里写好的 external-controller-unix，GUI 经它读状态、下发命令。
+//! - `mihomo.sock`：配置里写好的 external-controller-unix，GUI 经它读状态、下发命令；
+//! - `mihomo.pid` / `mihomo.log`：无 systemd 模式下记录后台进程 PID 与运行日志。
 //!
 //! API 不设 secret：socket 位于 0700 的数据目录里，文件权限已把其他用户挡在外面。
 pub const TEST_URL: &str = "http://www.gstatic.com/generate_204";
@@ -22,6 +24,14 @@ impl RuntimeCfg {
 
     pub fn config_path(&self) -> std::path::PathBuf {
         self.workdir.join("config.yaml")
+    }
+
+    pub fn pid_path(&self) -> std::path::PathBuf {
+        self.workdir.join("mihomo.pid")
+    }
+
+    pub fn log_path(&self) -> std::path::PathBuf {
+        self.workdir.join("mihomo.log")
     }
 
     pub fn client(&self) -> crate::backend::mihomo_api::MihomoClient {
@@ -127,17 +137,57 @@ pub fn tun_interface_up(device: Option<&str>) -> bool {
 /// systemd 用户服务的单元名与 `~/.config/systemd/user` 下的单元文件路径。
 pub const SERVICE_UNIT: &str = "tailash-mihomo.service";
 
-/// `systemctl --user` 可用（systemd 用户实例在线）才显示启停按钮。
+/// 内核进程管理器：优先使用 systemd 用户服务，不可用时回退到脱离会话的后台进程。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoreManager {
+    Systemd,
+    Direct,
+}
+
+impl CoreManager {
+    pub fn detect() -> Self {
+        if systemd_available() {
+            Self::Systemd
+        } else {
+            Self::Direct
+        }
+    }
+
+    pub fn uses_systemd(self) -> bool {
+        matches!(self, Self::Systemd)
+    }
+
+    pub fn is_active(self, cfg: &RuntimeCfg) -> bool {
+        match self {
+            Self::Systemd => service_active(),
+            Self::Direct => direct_active(cfg),
+        }
+    }
+
+    pub fn start(self, cfg: &RuntimeCfg) -> Result<()> {
+        match self {
+            Self::Systemd => service_start(&cfg.workdir),
+            Self::Direct => direct_start(cfg),
+        }
+    }
+
+    pub fn stop(self, cfg: &RuntimeCfg) -> Result<()> {
+        match self {
+            Self::Systemd => service_stop(),
+            Self::Direct => direct_stop(cfg),
+        }
+    }
+}
+
+/// `systemctl --user` 是否可用（systemd 用户实例在线）。
 pub fn systemd_available() -> bool {
     systemctl_cmd(&["is-system-running"])
         .output()
         .is_ok_and(|out| {
             let state = String::from_utf8_lossy(&out.stdout);
-            // degraded = 在运行但有个别单元失败；只排除 offline/starting。
-            // is-system-running 对 degraded 返回码非 0，所以只看 stdout 文本。
-            !state.contains("offline")
-                && !state.contains("starting")
-                && !state.contains("maintenance")
+            // degraded = 在运行但有个别单元失败；is-system-running 对 degraded 返回码非 0，
+            // 所以只看 stdout 文本，并要求明确为 running/degraded（排除空输出、offline、starting 等）。
+            matches!(state.trim(), "running" | "degraded")
         })
 }
 
@@ -236,6 +286,279 @@ fn systemctl_cmd(args: &[&str]) -> std::process::Command {
     cmd
 }
 
+/// PID 文件里记录的进程标识：PID + `/proc/<pid>/stat` 启动时间戳，防止 PID 复用导致误杀。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PidRecord {
+    pid: u32,
+    starttime: Option<u64>,
+}
+
+/// 解析 `/proc/<pid>/stat`，返回 `(进程状态字符, starttime)`。
+/// 第 2 字段 `(comm)` 可能包含空格甚至括号，因此从最后一个 `')'` 之后切分。
+fn parse_proc_stat(stat: &str) -> Option<(char, u64)> {
+    let (_, rest) = stat.rsplit_once(')')?;
+    let mut fields = rest.split_ascii_whitespace();
+    let state = fields.next()?.chars().next()?;
+    // 字段 3 是 state（已消费），字段 22 是 starttime → 跳过字段 4..=21 共 18 项。
+    let starttime = fields.nth(18)?.parse::<u64>().ok()?;
+    Some((state, starttime))
+}
+
+fn proc_info(pid: u32) -> Option<(char, u64)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    parse_proc_stat(&stat)
+}
+
+fn proc_alive(pid: u32, expected_starttime: Option<u64>) -> bool {
+    if let Some((state, starttime)) = proc_info(pid) {
+        if matches!(state, 'Z' | 'X' | 'x') {
+            return false;
+        }
+        return expected_starttime.is_none_or(|expected| starttime == expected);
+    }
+    if !std::path::Path::new("/proc/self").exists() && expected_starttime.is_none() {
+        // SAFETY: signal 0 仅探测进程是否存在，不发送信号。
+        return unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
+    }
+    false
+}
+
+fn parse_pid_file(text: &str) -> Option<PidRecord> {
+    let mut parts = text.split_ascii_whitespace();
+    let pid = parts.next()?.parse::<u32>().ok()?;
+    if pid == 0 {
+        return None;
+    }
+    let starttime = match parts.next() {
+        Some(raw) => Some(raw.parse::<u64>().ok()?),
+        None => None,
+    };
+    Some(PidRecord { pid, starttime })
+}
+
+fn read_pid_file(path: &std::path::Path) -> Option<PidRecord> {
+    let text = std::fs::read_to_string(path).ok()?;
+    parse_pid_file(&text)
+}
+
+fn write_pid_file(path: &std::path::Path, record: PidRecord) -> Result<()> {
+    let content = match record.starttime {
+        Some(start) => format!("{} {start}\n", record.pid),
+        None => format!("{}\n", record.pid),
+    };
+    std::fs::write(path, content).with_context(|| format!("写 {} 失败", path.display()))
+}
+
+/// 通过 Unix domain socket 的 `SO_PEERCRED` 获取正在监听 `mihomo.sock` 的同用户进程 PID。
+#[cfg(target_os = "linux")]
+fn socket_peer_pid(socket_path: &std::path::Path) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let stream = std::os::unix::net::UnixStream::connect(socket_path).ok()?;
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: cred 与 len 有效且对齐，fd 来自刚建立的 UnixStream。
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    // SAFETY: getuid 无副作用、不会失败。
+    let my_uid = unsafe { libc::getuid() };
+    if rc == 0 && cred.pid > 0 && cred.pid as u32 != std::process::id() && cred.uid == my_uid {
+        Some(cred.pid as u32)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn socket_peer_pid(_socket_path: &std::path::Path) -> Option<u32> {
+    None
+}
+
+/// 查找当前活跃的直启内核进程：优先查 `mihomo.sock` 对端 PID，再回退到 `mihomo.pid`。
+fn find_direct_process(cfg: &RuntimeCfg) -> Option<PidRecord> {
+    if let Some(pid) = socket_peer_pid(&cfg.socket_path()) {
+        let starttime = proc_info(pid).map(|(_, start)| start);
+        return Some(PidRecord { pid, starttime });
+    }
+    let pid_path = cfg.pid_path();
+    if let Some(rec) = read_pid_file(&pid_path) {
+        if proc_alive(rec.pid, rec.starttime) {
+            return Some(rec);
+        }
+        let _ = std::fs::remove_file(&pid_path);
+    }
+    None
+}
+
+/// 无 systemd 模式下内核是否在运行。
+pub fn direct_active(cfg: &RuntimeCfg) -> bool {
+    find_direct_process(cfg).is_some()
+}
+
+fn last_non_empty_line(path: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let line = text.lines().rev().find(|l| !l.trim().is_empty())?.trim();
+    const MAX_CHARS: usize = 200;
+    let clipped: String = line.chars().take(MAX_CHARS).collect();
+    Some(clipped)
+}
+
+/// 无 systemd 模式下直接脱离会话启动 mihomo 后台进程（退出 GUI 不影响）。
+pub fn direct_start(cfg: &RuntimeCfg) -> Result<()> {
+    if direct_active(cfg) {
+        return Ok(());
+    }
+    let binary = find_mihomo()?;
+    if !cfg.config_path().is_file() {
+        if cfg.profile_path.is_file() {
+            write_config(cfg)?;
+        } else {
+            anyhow::bail!("尚未生成配置文件，请先添加并更新订阅");
+        }
+    }
+    let workdir = cfg.workdir.to_string_lossy().into_owned();
+    let config = cfg.config_path().to_string_lossy().into_owned();
+    spawn_detached(cfg, &binary, &["-d", &workdir, "-f", &config])
+}
+
+fn spawn_detached(cfg: &RuntimeCfg, binary: &std::path::Path, args: &[&str]) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+
+    if direct_active(cfg) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&cfg.workdir).context("创建运行目录失败")?;
+
+    // 清理上次崩溃遗留的死 socket，避免新进程 bind 失败；若 socket 仍有监听者则直接视为已运行。
+    let sock = cfg.socket_path();
+    if sock.exists() {
+        match std::os::unix::net::UnixStream::connect(&sock) {
+            Ok(_) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                let _ = std::fs::remove_file(&sock);
+            }
+            Err(_) => {}
+        }
+    }
+
+    let log_path = cfg.log_path();
+    let (stdout, stderr) = match std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+    {
+        Ok(file) => match file.try_clone() {
+            Ok(err_file) => (Stdio::from(file), Stdio::from(err_file)),
+            Err(_) => (Stdio::from(file), Stdio::null()),
+        },
+        Err(_) => (Stdio::null(), Stdio::null()),
+    };
+
+    let mut cmd = std::process::Command::new(binary);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr);
+    // SAFETY: setsid 是 POSIX async-signal-safe 系统调用，使子进程脱离当前会话/终端，
+    // 退出 GUI 或终端发送 SIGINT/SIGHUP 均不会波及内核。
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("启动 {} 失败", binary.display()))?;
+    let pid = child.id();
+
+    // 短暂探测是否立刻退出（如配置错误），若 socket 提前就绪则立刻返回。
+    for _ in 0..5 {
+        if let Some(status) = child.try_wait().context("检查内核进程状态失败")? {
+            let detail = last_non_empty_line(&log_path).unwrap_or_default();
+            if detail.is_empty() {
+                anyhow::bail!("内核启动后立即退出（{status}）");
+            }
+            anyhow::bail!("内核启动后立即退出（{status}）：{detail}");
+        }
+        if std::os::unix::net::UnixStream::connect(&sock).is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+
+    let starttime = proc_info(pid).map(|(_, start)| start);
+    write_pid_file(&cfg.pid_path(), PidRecord { pid, starttime })?;
+
+    // 在 GUI 存活期间负责回收子进程，避免停止或崩溃后残留僵尸进程；
+    // GUI 退出时子进程因已 setsid 会被 init 接管并继续运行。
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+/// 无 systemd 模式下停止内核：先发 SIGTERM 让 mihomo 清理 TUN/路由，超时再 SIGKILL。
+pub fn direct_stop(cfg: &RuntimeCfg) -> Result<()> {
+    let Some(proc_rec) = find_direct_process(cfg) else {
+        let _ = std::fs::remove_file(cfg.pid_path());
+        return Ok(());
+    };
+    // SAFETY: proc_rec.pid 已由 SO_PEERCRED（同 UID）或 PID+starttime 校验。
+    let rc = unsafe { libc::kill(proc_rec.pid as libc::pid_t, libc::SIGTERM) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::ESRCH) {
+            anyhow::bail!("停止内核进程（PID {}）失败: {err}", proc_rec.pid);
+        }
+    }
+
+    for _ in 0..60 {
+        if !proc_alive(proc_rec.pid, proc_rec.starttime) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    if proc_alive(proc_rec.pid, proc_rec.starttime) {
+        // SAFETY: SIGTERM 3 秒内未退出，兜底强制结束。
+        let _ = unsafe { libc::kill(proc_rec.pid as libc::pid_t, libc::SIGKILL) };
+        for _ in 0..10 {
+            if !proc_alive(proc_rec.pid, proc_rec.starttime) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        anyhow::ensure!(
+            !proc_alive(proc_rec.pid, proc_rec.starttime),
+            "停止内核超时（PID {} 未退出）",
+            proc_rec.pid
+        );
+    }
+
+    let _ = std::fs::remove_file(cfg.pid_path());
+    let sock = cfg.socket_path();
+    if sock.exists() && std::os::unix::net::UnixStream::connect(&sock).is_err() {
+        let _ = std::fs::remove_file(&sock);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod service_file_tests {
     use super::*;
@@ -327,5 +650,114 @@ mod tun_interface_tests {
         assert_eq!(tun_interface_up(None), meta);
         assert_eq!(tun_interface_up(Some("")), meta);
         assert!(!tun_interface_up(Some("tailash-no-such-if")));
+    }
+}
+
+#[cfg(test)]
+mod direct_process_tests {
+    use super::*;
+
+    fn test_cfg(tag: &str) -> RuntimeCfg {
+        let dir = std::env::temp_dir().join(format!(
+            "tailash-direct-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        RuntimeCfg {
+            profile_path: dir.join("profile.yaml"),
+            workdir: dir,
+        }
+    }
+
+    #[test]
+    fn parse_proc_stat_handles_spaces_and_parens_in_comm() {
+        let line = "4242 (my (weird) proc) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 23 24";
+        assert_eq!(parse_proc_stat(line), Some(('S', 987654)));
+        let zombie = "4242 (mihomo) Z 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 111 23";
+        assert_eq!(parse_proc_stat(zombie), Some(('Z', 111)));
+    }
+
+    #[test]
+    fn pid_file_parses_valid_and_rejects_invalid() {
+        assert_eq!(
+            parse_pid_file("1234 56789\n"),
+            Some(PidRecord {
+                pid: 1234,
+                starttime: Some(56789),
+            })
+        );
+        assert_eq!(
+            parse_pid_file("1234\n"),
+            Some(PidRecord {
+                pid: 1234,
+                starttime: None,
+            })
+        );
+        assert_eq!(parse_pid_file("0 123\n"), None);
+        assert_eq!(parse_pid_file("not-a-pid\n"), None);
+    }
+
+    #[test]
+    fn stale_pid_with_mismatched_starttime_is_ignored_and_cleaned() {
+        let cfg = test_cfg("stale-pid");
+        let my_pid = std::process::id();
+        let my_start = proc_info(my_pid).map(|(_, s)| s).unwrap_or(1);
+        let bogus_start = my_start.wrapping_add(12345);
+        write_pid_file(
+            &cfg.pid_path(),
+            PidRecord {
+                pid: my_pid,
+                starttime: Some(bogus_start),
+            },
+        )
+        .unwrap();
+
+        assert!(!direct_active(&cfg));
+        assert!(!cfg.pid_path().exists(), "过期的 pid 文件应被自动清理");
+        std::fs::remove_dir_all(&cfg.workdir).unwrap();
+    }
+
+    #[test]
+    fn spawn_detached_starts_tracks_and_stops_cleanly() {
+        let cfg = test_cfg("lifecycle");
+        spawn_detached(
+            &cfg,
+            std::path::Path::new("/bin/sh"),
+            &["-c", "exec sleep 30"],
+        )
+        .unwrap();
+
+        assert!(direct_active(&cfg), "启动后应检测到进程在线");
+        let rec = read_pid_file(&cfg.pid_path()).expect("应写入 pid 文件");
+        assert_ne!(rec.pid, std::process::id());
+        // 校验子进程已脱离当前会话（setsid）
+        let child_sid = unsafe { libc::getsid(rec.pid as libc::pid_t) };
+        assert_eq!(child_sid, rec.pid as libc::pid_t, "子进程应成为新会话首进程");
+
+        direct_stop(&cfg).unwrap();
+        assert!(!direct_active(&cfg), "停止后进程应退出");
+        assert!(!cfg.pid_path().exists(), "停止后应清理 pid 文件");
+        std::fs::remove_dir_all(&cfg.workdir).unwrap();
+    }
+
+    #[test]
+    fn spawn_detached_reports_immediate_exit_with_log_tail() {
+        let cfg = test_cfg("early-exit");
+        let err = spawn_detached(
+            &cfg,
+            std::path::Path::new("/bin/sh"),
+            &["-c", "echo bad-config-line >&2; exit 2"],
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("立即退出"), "{err}");
+        assert!(err.contains("bad-config-line"), "{err}");
+        assert!(!direct_active(&cfg));
+        std::fs::remove_dir_all(&cfg.workdir).unwrap();
     }
 }

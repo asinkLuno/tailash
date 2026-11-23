@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 #[derive(Debug, Clone)]
 pub enum UiCmd {
-    /// 经 systemd 用户服务启动/停止内核（不弹权限窗，详见 runtime::service_start）。
+    /// 启动/停止内核（优先 systemd 用户服务，无 systemd 时回退到脱离会话的后台进程）。
     ToggleCore,
     /// mihomo 缺 cap_net_admin 时经 pkexec 补授权（唯一弹系统授权窗的操作）。
     GrantCap,
@@ -53,6 +53,16 @@ pub struct SubStatus {
     pub updated_at: Option<u64>,
 }
 
+/// 网速折线图历史点（单位：字节/秒）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficPoint {
+    pub up: u64,
+    pub down: u64,
+}
+
+const TRAFFIC_HISTORY_LEN: usize = 60;
+
 /// worker -> UI 的可见结果（经 Tauri 事件/命令序列化给前端，camelCase）
 #[derive(Default, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,10 +70,14 @@ pub struct Snapshot {
     pub core_running: bool,
     /// 内核二进制缺 cap_net_admin（getcap 探测），true 时 UI 显示「授权 TUN」按钮
     pub cap_missing: bool,
-    /// systemd 用户实例在线（启动时探测一次）；false 时 UI 不显示启停按钮
+    /// systemd 用户实例在线（启动时探测一次）；false 时回退到直接后台进程管理
     pub systemd_available: bool,
     pub mode: crate::backend::mihomo_api::ProxyMode,
     pub tun_enabled: bool,
+    /// 实时网速与累计流量（来自 mihomo `/traffic`）
+    pub traffic: crate::backend::mihomo_api::TrafficSample,
+    /// 最近 60 秒的网速历史，供前端折线图绘制
+    pub traffic_history: Vec<TrafficPoint>,
     /// 节点/组的展示模型（顺序来自订阅，见 proxy_view）
     pub view: crate::backend::proxy_view::ProxyView,
     /// 全部订阅（settings.json 的前端视图）
@@ -99,11 +113,12 @@ pub fn spawn_worker(
         // 找不到内核时不显示授权按钮；缺内核的提示在点「启动内核」时给出。
         let cap_missing = crate::backend::runtime::find_mihomo()
             .is_ok_and(|binary| !crate::backend::runtime::has_cap_net_admin(&binary));
-            let systemd_available = crate::backend::runtime::systemd_available();
-            set_snap(&snapshot, |snap| {
-                snap.cap_missing = cap_missing;
-                snap.systemd_available = systemd_available;
-            });
+        let core_manager = crate::backend::runtime::CoreManager::detect();
+        let systemd_available = core_manager.uses_systemd();
+        set_snap(&snapshot, |snap| {
+            snap.cap_missing = cap_missing;
+            snap.systemd_available = systemd_available;
+        });
             // 订阅登记：读 settings.json（旧版单订阅自动迁移成一条订阅）；
             // 活动订阅的内容还没物化成 profile.yaml 就补上，保证接下来启动的内核用得上。
             let mut settings = {
@@ -145,6 +160,7 @@ pub fn spawn_worker(
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             };
             if matches!(cmd, UiCmd::Shutdown) {
+                link.stop_traffic();
                 if let Some(cancel) = delay_cancel.take() {
                     cancel.store(true, Ordering::Relaxed);
                 }
@@ -154,8 +170,8 @@ pub fn spawn_worker(
             match cmd {
                 UiCmd::Shutdown => unreachable!(),
                 UiCmd::ToggleCore => {
-                    if crate::backend::runtime::service_active() {
-                        match crate::backend::runtime::service_stop() {
+                    if core_manager.is_active(&cfg) {
+                        match core_manager.stop(&cfg) {
                             Ok(()) => set_snap(&snapshot, |snap| {
                                 snap.message = "正在停止内核…".into();
                             }),
@@ -164,7 +180,7 @@ pub fn spawn_worker(
                             }),
                         }
                     } else {
-                        match crate::backend::runtime::service_start(&cfg.workdir) {
+                        match core_manager.start(&cfg) {
                             Ok(()) => set_snap(&snapshot, |snap| {
                                 snap.message = "正在启动内核…".into();
                             }),
@@ -180,16 +196,16 @@ pub fn spawn_worker(
                     // pkexec 要等用户在授权窗里操作，放到线程里，别卡住 poll 与其它命令。
                     set_snap(&snapshot, |snap| snap.message = "等待授权…".into());
                     let snapshot = snapshot.clone();
-                    let workdir = cfg.workdir.clone();
+                    let cfg = cfg.clone();
                     std::thread::spawn(move || {
                         let granted = crate::backend::runtime::find_mihomo().and_then(|binary| {
                             crate::backend::runtime::grant_cap_net_admin(&binary)
                         });
                         // 已经在跑的内核拿不到新授权（file caps 只在 exec 时生效），重启一次让它带上
                         let restarted = granted.is_ok()
-                            && crate::backend::runtime::service_active()
-                            && crate::backend::runtime::service_stop().is_ok()
-                            && crate::backend::runtime::service_start(&workdir).is_ok();
+                            && core_manager.is_active(&cfg)
+                            && core_manager.stop(&cfg).is_ok()
+                            && core_manager.start(&cfg).is_ok();
                         set_snap(&snapshot, |snap| match granted {
                             Ok(()) => {
                                 snap.cap_missing = false;
@@ -839,6 +855,7 @@ struct CoreLink {
     client: crate::backend::mihomo_api::MihomoClient,
     /// None = 还没探测过；用来让"未运行"提示只在状态变化时写一次，不覆盖用户操作的反馈。
     connected: Option<bool>,
+    traffic_cancel: Option<Arc<AtomicBool>>,
 }
 
 impl CoreLink {
@@ -846,7 +863,21 @@ impl CoreLink {
         Self {
             client,
             connected: None,
+            traffic_cancel: None,
         }
+    }
+
+    fn stop_traffic(&mut self) {
+        if let Some(cancel) = self.traffic_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn start_traffic(&mut self, snapshot: &SharedSnapshot) {
+        self.stop_traffic();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.traffic_cancel = Some(cancel.clone());
+        spawn_traffic_stream(self.client.clone(), snapshot.clone(), cancel);
     }
 
     fn live(&self) -> Option<crate::backend::mihomo_api::MihomoClient> {
@@ -863,14 +894,11 @@ impl CoreLink {
             Ok(config) => config,
             Err(_) => {
                 if self.connected != Some(false) {
+                    self.stop_traffic();
                     if let Some(cancel) = delay_cancel.take() {
                         cancel.store(true, Ordering::Relaxed);
                     }
-                    let start = if snapshot.read().is_ok_and(|s| s.systemd_available) {
-                        "点「启动内核」".to_string()
-                    } else {
-                        format!("在终端运行 {}", cfg.start_command())
-                    };
+                    let start = "点「启动内核」";
                     let message = if !cfg.profile_path.is_file() {
                         format!("{NOT_RUNNING}；请先更新订阅生成配置，再启动内核")
                     } else if self.connected.is_none() {
@@ -913,6 +941,7 @@ impl CoreLink {
                     snap.message = "已连接内核".into();
                 });
                 self.connected = Some(true);
+                self.start_traffic(snapshot);
             }
             Err(e) => set_snap(snapshot, |snap| {
                 snap.message = format!("已连上内核，但读取节点失败: {e:#}");
@@ -921,10 +950,58 @@ impl CoreLink {
     }
 }
 
+fn push_traffic_sample(
+    snap: &mut Snapshot,
+    mut sample: crate::backend::mihomo_api::TrafficSample,
+) {
+    // 兼容旧版内核：未提供 upTotal/downTotal 时自行累计。
+    if sample.up_total == 0 && sample.down_total == 0 {
+        sample.up_total = snap.traffic.up_total.saturating_add(sample.up);
+        sample.down_total = snap.traffic.down_total.saturating_add(sample.down);
+    }
+    snap.traffic = sample;
+    if snap.traffic_history.len() >= TRAFFIC_HISTORY_LEN {
+        let drop_count = snap.traffic_history.len() + 1 - TRAFFIC_HISTORY_LEN;
+        snap.traffic_history.drain(..drop_count);
+    }
+    snap.traffic_history.push(TrafficPoint {
+        up: sample.up,
+        down: sample.down,
+    });
+}
+
+fn spawn_traffic_stream(
+    client: crate::backend::mihomo_api::MihomoClient,
+    snapshot: SharedSnapshot,
+    cancel: Arc<AtomicBool>,
+) {
+    std::thread::spawn(move || {
+        while !cancel.load(Ordering::Relaxed) {
+            let _ = client.stream_traffic(&cancel, |sample| {
+                if !cancel.load(Ordering::Relaxed) {
+                    set_snap(&snapshot, |snap| {
+                        if snap.core_running {
+                            push_traffic_sample(snap, sample);
+                        }
+                    });
+                }
+            });
+            for _ in 0..10 {
+                if cancel.load(Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    });
+}
+
 fn mark_core_stopped(snapshot: &SharedSnapshot, message: &str) {
     set_snap(snapshot, |snap| {
         snap.core_running = false;
         snap.tun_enabled = false;
+        snap.traffic = Default::default();
+        snap.traffic_history.clear();
         snap.view = Default::default();
         snap.testing.clear();
         snap.test_all_running = false;
@@ -1148,6 +1225,44 @@ mod tests {
         assert!(subs[1].active);
         assert_eq!(subs[0].node_count, Some(7));
         assert_eq!(subs[1].updated_at, None);
+    }
+
+    #[test]
+    fn push_traffic_sample_caps_history_and_accumulates_missing_totals() {
+        let mut snap = Snapshot::default();
+        for i in 1..=(TRAFFIC_HISTORY_LEN as u64 + 5) {
+            push_traffic_sample(
+                &mut snap,
+                crate::backend::mihomo_api::TrafficSample {
+                    up: i,
+                    down: i * 10,
+                    up_total: 0,
+                    down_total: 0,
+                },
+            );
+        }
+        assert_eq!(snap.traffic_history.len(), TRAFFIC_HISTORY_LEN);
+        assert_eq!(snap.traffic_history[0], TrafficPoint { up: 6, down: 60 });
+        assert_eq!(
+            snap.traffic_history[TRAFFIC_HISTORY_LEN - 1],
+            TrafficPoint { up: 65, down: 650 }
+        );
+        let expected_sum: u64 = (1..=65).sum();
+        assert_eq!(snap.traffic.up_total, expected_sum);
+        assert_eq!(snap.traffic.down_total, expected_sum * 10);
+
+        // 内核上报了明确累计值时以内核为准
+        push_traffic_sample(
+            &mut snap,
+            crate::backend::mihomo_api::TrafficSample {
+                up: 100,
+                down: 200,
+                up_total: 9999,
+                down_total: 88888,
+            },
+        );
+        assert_eq!(snap.traffic.up_total, 9999);
+        assert_eq!(snap.traffic.down_total, 88888);
     }
 }
 

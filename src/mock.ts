@@ -1,6 +1,6 @@
 //! 浏览器 dev 用的假后端（无 Tauri 环境）：镜像 worker 的命令语义，方便纯前端走查 UI。
 //! 真实环境（tauri dev/build）不会引入此路径的行为。
-import type { Cmd, GroupInfo, NodeInfo, Snapshot } from "./api";
+import type { Cmd, GroupInfo, NodeInfo, Snapshot, TrafficPoint } from "./api";
 
 export const MOCK_SNAPSHOT_EVENT = "tailash-mock-snapshot";
 
@@ -41,13 +41,26 @@ const groups: GroupInfo[] = [
   group("磁力下载", "Selector", "DIRECT", ["DIRECT", "节点选择"]),
 ];
 
+const INITIAL_TRAFFIC_HISTORY: TrafficPoint[] = Array.from({ length: 30 }, (_, i) => ({
+  down: Math.round((350 + 280 * Math.sin(i / 4) + ((i * 73) % 190)) * 1024),
+  up: Math.round((70 + 45 * Math.cos(i / 3) + ((i * 31) % 60)) * 1024),
+}));
+
 export function mockDefaultSnapshot(): Snapshot {
+  const last = INITIAL_TRAFFIC_HISTORY[INITIAL_TRAFFIC_HISTORY.length - 1];
   return {
     coreRunning: true,
     capMissing: true,
     systemdAvailable: true,
     mode: "rule",
     tunEnabled: true,
+    traffic: {
+      up: last.up,
+      down: last.down,
+      upTotal: 218 * 1024 * 1024,
+      downTotal: 1420 * 1024 * 1024,
+    },
+    trafficHistory: [...INITIAL_TRAFFIC_HISTORY],
     view: { nodes, groups },
     subs: [
       {
@@ -82,6 +95,23 @@ function emit() {
   );
 }
 
+// 浏览器 mock 模式下每秒推一帧演示网速，便于调试折线图。
+if (typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)) {
+  window.setInterval(() => {
+    if (!state.coreRunning) return;
+    const down = Math.round((80 + Math.random() * 900) * 1024);
+    const up = Math.round((20 + Math.random() * 180) * 1024);
+    state.traffic = {
+      up,
+      down,
+      upTotal: state.traffic.upTotal + up,
+      downTotal: state.traffic.downTotal + down,
+    };
+    state.trafficHistory = [...state.trafficHistory.slice(-59), { up, down }];
+    emit();
+  }, 1000);
+}
+
 function findGroup(name: string): GroupInfo | undefined {
   return state.view.groups.find((g) => g.name === name);
 }
@@ -91,6 +121,10 @@ export function mockSendCmd(cmd: Cmd): Promise<void> {
     case "toggleCore":
       state.coreRunning = !state.coreRunning;
       state.tunEnabled = false;
+      if (!state.coreRunning) {
+        state.traffic = { up: 0, down: 0, upTotal: 0, downTotal: 0 };
+        state.trafficHistory = [];
+      }
       state.message = state.coreRunning ? "正在启动内核…" : "正在停止内核…";
       break;
     case "grantCap":

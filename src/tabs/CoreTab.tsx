@@ -1,6 +1,7 @@
-//! Tab 1：mihomo 内核启停、TUN 模式、cap_net_admin 授权、运行模式。
+//! Tab 1：mihomo 内核启停、TUN 模式、cap_net_admin 授权、运行模式、实时网速监控。
 import { sendCmd } from "../api";
 import type { ProxyMode, Snapshot } from "../api";
+import TrafficCard from "../components/TrafficCard";
 
 const MODES: { value: ProxyMode; label: string }[] = [
   { value: "rule", label: "策略" },
@@ -17,22 +18,18 @@ export default function CoreTab({ snap }: { snap: Snapshot }) {
             <div>
               <h2 className="card-title text-base">mihomo 内核</h2>
               <p className="text-sm text-base-content/60">
-                经 systemd 用户服务后台运行，退出应用不影响
+                {snap.systemdAvailable
+                  ? "经 systemd 用户服务后台运行，退出应用不影响"
+                  : "直接以后台进程运行（无 systemd），退出应用不影响"}
               </p>
             </div>
             <button
               className={`btn ${snap.coreRunning ? "btn-error" : "btn-primary"}`}
-              disabled={!snap.systemdAvailable}
               onClick={() => sendCmd({ type: "toggleCore" })}
             >
               {snap.coreRunning ? "停止内核" : "启动内核"}
             </button>
           </div>
-          {!snap.systemdAvailable && (
-            <p className="text-sm text-warning">
-              未检测到 systemd 用户实例，应用内启停不可用；可在终端手动运行内核。
-            </p>
-          )}
 
           <div className="divider my-0" />
 
@@ -90,6 +87,12 @@ export default function CoreTab({ snap }: { snap: Snapshot }) {
           </div>
         </div>
       </div>
+
+      <TrafficCard
+        coreRunning={snap.coreRunning}
+        traffic={snap.traffic}
+        history={snap.trafficHistory}
+      />
     </div>
   );
 }

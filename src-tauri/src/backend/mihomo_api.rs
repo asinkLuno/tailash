@@ -79,6 +79,20 @@ pub struct ProxyDelay {
     pub delay: u32,
 }
 
+/// `/traffic` 流每 ~1 秒推送的一帧流量采样（单位：字节/秒与累计字节）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrafficSample {
+    #[serde(default)]
+    pub up: u64,
+    #[serde(default)]
+    pub down: u64,
+    #[serde(default)]
+    pub up_total: u64,
+    #[serde(default)]
+    pub down_total: u64,
+}
+
 /// /proxies 里 history 的单条记录（只关心延迟值）
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct DelayRecord {
@@ -318,6 +332,199 @@ impl MihomoClient {
         anyhow::ensure!(st == 204 || st == 200, "PUT /configs -> {st} {body}");
         Ok(())
     }
+
+    /// 订阅实时流量流（`GET /traffic`，mihomo 每秒推一帧 JSON）。
+    /// 当 `cancel` 置为 true 或对端关闭连接时返回 `Ok(())`。
+    pub fn stream_traffic(
+        &self,
+        cancel: &std::sync::atomic::AtomicBool,
+        on_sample: impl FnMut(TrafficSample),
+    ) -> Result<()> {
+        let mut stream = self.connect()?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+        stream.write_all(
+            b"GET /traffic HTTP/1.1\r\nHost: localhost\r\nAccept: application/json\r\n\r\n",
+        )?;
+        let mut reader = BufReader::new(stream);
+        read_traffic_stream(&mut reader, cancel, on_sample)
+    }
+}
+
+fn read_stream_line(
+    reader: &mut impl BufRead,
+    limit: usize,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<Option<String>> {
+    use std::io::ErrorKind;
+    use std::sync::atomic::Ordering;
+    let mut line = String::new();
+    let mut timeouts = 0u8;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        match reader.fill_buf() {
+            Ok([]) => {
+                if line.is_empty() {
+                    return Ok(None);
+                }
+                return Ok(Some(line));
+            }
+            Ok(available) => {
+                timeouts = 0;
+                let take = available
+                    .iter()
+                    .position(|b| *b == b'\n')
+                    .map_or(available.len(), |i| i + 1);
+                anyhow::ensure!(line.len() + take <= limit, "HTTP stream line too large");
+                let done = available[..take].contains(&b'\n');
+                line.push_str(&String::from_utf8_lossy(&available[..take]));
+                reader.consume(take);
+                if done {
+                    return Ok(Some(line));
+                }
+            }
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(None);
+                }
+                timeouts += 1;
+                anyhow::ensure!(timeouts < 5, "traffic stream timed out");
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+fn read_exact_cancelable(
+    reader: &mut impl Read,
+    mut buf: &mut [u8],
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<bool> {
+    use std::io::ErrorKind;
+    use std::sync::atomic::Ordering;
+    let mut timeouts = 0u8;
+    while !buf.is_empty() {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+        match reader.read(buf) {
+            Ok(0) => return Ok(false),
+            Ok(n) => {
+                timeouts = 0;
+                buf = &mut buf[n..];
+            }
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(false);
+                }
+                timeouts += 1;
+                anyhow::ensure!(timeouts < 5, "traffic stream timed out");
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(true)
+}
+
+fn read_traffic_stream(
+    reader: &mut impl BufRead,
+    cancel: &std::sync::atomic::AtomicBool,
+    mut on_sample: impl FnMut(TrafficSample),
+) -> Result<()> {
+    use std::sync::atomic::Ordering;
+    let Some(status_line) = read_stream_line(reader, 8192, cancel)? else {
+        return Ok(());
+    };
+    let mut parts = status_line.split_whitespace();
+    anyhow::ensure!(parts.next() == Some("HTTP/1.1"), "bad HTTP status line");
+    let status: u16 = parts
+        .next()
+        .context("missing HTTP status")?
+        .parse()
+        .context("invalid HTTP status")?;
+    anyhow::ensure!(status == 200, "GET /traffic -> {status}");
+
+    let mut chunked = false;
+    let mut header_bytes = 0usize;
+    loop {
+        let Some(line) = read_stream_line(reader, 8192, cancel)? else {
+            return Ok(());
+        };
+        header_bytes += line.len();
+        anyhow::ensure!(header_bytes <= 64 * 1024, "HTTP headers too large");
+        if line == "\r\n" || line == "\n" {
+            break;
+        }
+        let (name, value) = line
+            .trim_end_matches(['\r', '\n'])
+            .split_once(':')
+            .context("malformed HTTP header")?;
+        if name.eq_ignore_ascii_case("transfer-encoding")
+            && value.trim().eq_ignore_ascii_case("chunked")
+        {
+            chunked = true;
+        }
+    }
+
+    if chunked {
+        let mut pending = Vec::new();
+        while !cancel.load(Ordering::Relaxed) {
+            let Some(size_line) = read_stream_line(reader, 8192, cancel)? else {
+                break;
+            };
+            let size_text = size_line
+                .trim_end_matches(['\r', '\n'])
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim();
+            if size_text.is_empty() {
+                continue;
+            }
+            let size = usize::from_str_radix(size_text, 16).context("invalid chunk size")?;
+            anyhow::ensure!(size <= 64 * 1024, "traffic chunk too large");
+            if size == 0 {
+                break;
+            }
+            let mut chunk = vec![0u8; size];
+            if !read_exact_cancelable(reader, &mut chunk, cancel)? {
+                break;
+            }
+            let mut crlf = [0u8; 2];
+            if !read_exact_cancelable(reader, &mut crlf, cancel)? {
+                break;
+            }
+            anyhow::ensure!(crlf == *b"\r\n", "invalid chunk terminator");
+            pending.extend_from_slice(&chunk);
+            anyhow::ensure!(pending.len() <= 64 * 1024, "traffic buffer too large");
+            while let Some(pos) = pending.iter().position(|b| *b == b'\n') {
+                let line: Vec<u8> = pending.drain(..=pos).collect();
+                let trimmed = String::from_utf8_lossy(&line);
+                let trimmed = trimmed.trim();
+                if !trimmed.is_empty()
+                    && let Ok(sample) = serde_json::from_str::<TrafficSample>(trimmed)
+                {
+                    on_sample(sample);
+                }
+            }
+        }
+    } else {
+        while !cancel.load(Ordering::Relaxed) {
+            let Some(line) = read_stream_line(reader, 64 * 1024, cancel)? else {
+                break;
+            };
+            let trimmed = line.trim();
+            if !trimmed.is_empty()
+                && let Ok(sample) = serde_json::from_str::<TrafficSample>(trimmed)
+            {
+                on_sample(sample);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn urlencode(s: &str) -> String {
@@ -407,6 +614,68 @@ mod tests {
     fn test_parse_version() {
         let v: Version = serde_json::from_str(r#"{"meta":true,"version":"v1.19.34"}"#).unwrap();
         assert_eq!(v.version, "v1.19.34");
+    }
+
+    #[test]
+    fn traffic_stream_parses_chunked_and_split_json_lines() {
+        let first = "{\"up\":120,\"down\":3400,\"upTotal\":500,\"downTotal\":9000}\n";
+        let second_a = "{\"up\":50,\"do";
+        let second_b = "wn\":800}\n";
+        let raw = format!(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n\
+             {:x}\r\n{}\r\n{:x}\r\n{}\r\n{:x}\r\n{}\r\n0\r\n\r\n",
+            first.len(),
+            first,
+            second_a.len(),
+            second_a,
+            second_b.len(),
+            second_b,
+        );
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut cursor = std::io::Cursor::new(raw.into_bytes());
+        let mut got = Vec::new();
+        read_traffic_stream(&mut cursor, &cancel, |s| got.push(s)).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                TrafficSample {
+                    up: 120,
+                    down: 3400,
+                    up_total: 500,
+                    down_total: 9000,
+                },
+                TrafficSample {
+                    up: 50,
+                    down: 800,
+                    up_total: 0,
+                    down_total: 0,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn traffic_stream_parses_ndjson_and_stops_on_cancel() {
+        let raw = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n\
+                   {\"up\":1,\"down\":2}\n\
+                   {\"up\":3,\"down\":4}\n";
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut cursor = std::io::Cursor::new(raw.as_bytes());
+        let mut got = Vec::new();
+        read_traffic_stream(&mut cursor, &cancel, |s| {
+            got.push(s);
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        })
+        .unwrap();
+        assert_eq!(
+            got,
+            vec![TrafficSample {
+                up: 1,
+                down: 2,
+                up_total: 0,
+                down_total: 0,
+            }]
+        );
     }
 }
 
