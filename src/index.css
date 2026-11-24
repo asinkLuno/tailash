@@ -12,3 +12,9 @@
   --color-primary: oklch(52% 0.15 254);
   --color-primary-content: oklch(97% 0.015 254);
 }
+
+/* 长节点列表跳过视口外行的布局与绘制，降低大量节点下的主线程开销 */
+.node-row-virtual {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 32px;
+}

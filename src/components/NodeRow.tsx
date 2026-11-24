@@ -1,4 +1,6 @@
 //! 节点行：名称 + 类型/UDP 徽标 + 延迟徽标 + 单点测速；可点击（Selector 组内）切换。
+//! 用 React.memo + 稳定回调签名（传 node.name / groupName）避免未变动行随批量测速重渲染。
+import { memo } from "react";
 import type { NodeInfo } from "../api";
 import { delayBadgeClass, delayText } from "../delay";
 
@@ -12,26 +14,33 @@ interface Props {
   selected?: boolean;
   /** 所属组是 Selector 才可点击切换 */
   clickable: boolean;
-  onSelect?: () => void;
-  onTest?: () => void;
+  /** 所属组名（clickable 为 true 时传给 onSelect） */
+  groupName?: string;
+  onSelect?: (group: string, node: string) => void;
+  onTest?: (name: string) => void;
 }
 
-export default function NodeRow({
+function NodeRow({
   node,
   testing,
   failed,
   busy = false,
   selected = false,
   clickable,
+  groupName,
   onSelect,
   onTest,
 }: Props) {
   return (
     <div
-      className={`flex items-center gap-2 rounded-md px-2 py-1 ${
+      className={`node-row-virtual flex items-center gap-2 rounded-md px-2 py-1 ${
         selected ? "bg-primary/10" : ""
       } ${clickable ? "cursor-pointer hover:bg-base-200" : ""}`}
-      onClick={clickable ? onSelect : undefined}
+      onClick={
+        clickable && groupName && onSelect
+          ? () => onSelect(groupName, node.name)
+          : undefined
+      }
       title={clickable ? "点击切换到此节点" : undefined}
     >
       <span
@@ -56,7 +65,7 @@ export default function NodeRow({
         disabled={testing || busy}
         onClick={(e) => {
           e.stopPropagation();
-          onTest?.();
+          onTest?.(node.name);
         }}
         title="测速此节点"
       >
@@ -65,3 +74,5 @@ export default function NodeRow({
     </div>
   );
 }
+
+export default memo(NodeRow);
