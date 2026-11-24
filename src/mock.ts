@@ -91,7 +91,15 @@ let state: Snapshot = mockDefaultSnapshot();
 
 function emit() {
   window.dispatchEvent(
-    new CustomEvent<Snapshot>(MOCK_SNAPSHOT_EVENT, { detail: { ...state } }),
+    new CustomEvent<Snapshot>(MOCK_SNAPSHOT_EVENT, {
+      detail: {
+        ...state,
+        view: {
+          nodes: state.view.nodes.map((n) => ({ ...n })),
+          groups: state.view.groups.map((g) => ({ ...g, members: [...g.members] })),
+        },
+      },
+    }),
   );
 }
 

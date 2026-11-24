@@ -1,11 +1,25 @@
 //! tailash 主界面：顶栏（品牌 + 三 tab 导航 + 状态徽标）+ 内容区 + 底部消息条。
 //! 状态唯一来源是 useSnapshot（后端 500ms 增量推送），命令一律经 sendCmd 异步下发。
 import { useState } from "react";
-import { useSnapshot } from "./api";
+import { useSnapshot, useTraffic } from "./api";
 import { formatSpeed } from "./traffic";
 import CoreTab from "./tabs/CoreTab";
 import SubsTab from "./tabs/SubsTab";
 import NodesTab from "./tabs/NodesTab";
+
+function NavbarTraffic() {
+  const { traffic } = useTraffic();
+  return (
+    <div
+      className="hidden sm:flex items-center gap-2 rounded-box bg-base-100/80 px-2 py-0.5 font-mono text-xs tabular-nums"
+      title="实时下载 / 上传网速"
+    >
+      <span className="text-primary">↓ {formatSpeed(traffic.down)}</span>
+      <span className="text-base-content/30">/</span>
+      <span className="text-success">↑ {formatSpeed(traffic.up)}</span>
+    </div>
+  );
+}
 
 type Tab = "core" | "subs" | "nodes";
 
@@ -42,16 +56,7 @@ export default function App() {
           ))}
         </div>
         <div className="ml-auto flex items-center gap-2">
-          {snap.coreRunning && (
-            <div
-              className="hidden sm:flex items-center gap-2 rounded-box bg-base-100/80 px-2 py-0.5 font-mono text-xs tabular-nums"
-              title="实时下载 / 上传网速"
-            >
-              <span className="text-primary">↓ {formatSpeed(snap.traffic.down)}</span>
-              <span className="text-base-content/30">/</span>
-              <span className="text-success">↑ {formatSpeed(snap.traffic.up)}</span>
-            </div>
-          )}
+          {snap.coreRunning && <NavbarTraffic />}
           <span
             className={`badge badge-sm ${
               snap.coreRunning ? "badge-success" : "badge-error badge-outline"

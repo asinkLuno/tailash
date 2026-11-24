@@ -1,7 +1,18 @@
 //! Tab 1：mihomo 内核启停、TUN 模式、cap_net_admin 授权、运行模式、实时网速监控。
-import { sendCmd } from "../api";
+import { sendCmd, useTraffic } from "../api";
 import type { ProxyMode, Snapshot } from "../api";
 import TrafficCard from "../components/TrafficCard";
+
+function LiveTrafficCard({ coreRunning }: { coreRunning: boolean }) {
+  const { traffic, trafficHistory } = useTraffic();
+  return (
+    <TrafficCard
+      coreRunning={coreRunning}
+      traffic={traffic}
+      history={trafficHistory}
+    />
+  );
+}
 
 const MODES: { value: ProxyMode; label: string }[] = [
   { value: "rule", label: "策略" },
@@ -88,11 +99,7 @@ export default function CoreTab({ snap }: { snap: Snapshot }) {
         </div>
       </div>
 
-      <TrafficCard
-        coreRunning={snap.coreRunning}
-        traffic={snap.traffic}
-        history={snap.trafficHistory}
-      />
+      <LiveTrafficCard coreRunning={snap.coreRunning} />
     </div>
   );
 }
