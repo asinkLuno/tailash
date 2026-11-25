@@ -30,7 +30,62 @@ function handleTest(name: string) {
 /** 记住上次排序选择（深链 #nodes?sort=… 优先于它）。 */
 const SORT_STORAGE_KEY = "tailash.nodes.sort";
 
-function NodesTab({ snap }: { snap: Snapshot }) {
+interface NodesTabProps {
+  snap: Snapshot;
+  geminiOnly: boolean;
+  onGeminiOnlyChange: (on: boolean) => void;
+}
+
+function GeminiFilterControl({
+  geminiOnly,
+  running,
+  checkedCount,
+  totalCount,
+  onToggle,
+  onRecheck,
+}: {
+  geminiOnly: boolean;
+  running: boolean;
+  checkedCount: number;
+  totalCount: number;
+  onToggle: (on: boolean) => void;
+  onRecheck: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <label className="label cursor-pointer gap-1.5 text-sm">
+        <input
+          type="checkbox"
+          className="checkbox checkbox-sm"
+          checked={geminiOnly}
+          onChange={(e) => onToggle(e.target.checked)}
+          title="只看 Gemini 可用的节点（尚无结果时自动检测）"
+        />
+        Gemini 可用
+        {running && (
+          <>
+            <span className="loading loading-spinner loading-xs" />
+            <span className="text-xs text-base-content/60 tabular-nums">
+              {checkedCount}/{totalCount}
+            </span>
+          </>
+        )}
+      </label>
+      {(geminiOnly || checkedCount > 0) && (
+        <button
+          className="btn btn-ghost btn-xs"
+          disabled={running}
+          onClick={onRecheck}
+          title="重新检测全部节点的 Gemini 可用性"
+        >
+          重测
+        </button>
+      )}
+    </div>
+  );
+}
+
+function NodesTab({ snap, geminiOnly, onGeminiOnlyChange }: NodesTabProps) {
   const [sort, setSort] = useState<SortMode>(() => {
     const match = /sort=(subscription|delay|name)/.exec(window.location.hash);
     if (match) return match[1] as SortMode;
@@ -43,11 +98,16 @@ function NodesTab({ snap }: { snap: Snapshot }) {
   // 有策略组时默认折叠「全部节点」，避免上千个重复 DOM 行拖慢主线程；无策略组时自动展开
   const [allOpenOverride, setAllOpenOverride] = useState<boolean | null>(null);
 
-  const [geminiOnly, setGeminiOnly] = useState(false);
-  // 勾选筛选即触发一轮检测：后端按节点各自的本地入口探测，结果逐节点流回快照
+  const checkedCount = useMemo(() => Object.keys(snap.gemini).length, [snap.gemini]);
+  // 首次勾选且尚无本轮结果时自动触发检测；已有结果时仅切筛选，重测交给显式按钮
   function toggleGeminiOnly(on: boolean) {
-    setGeminiOnly(on);
-    if (on && !snap.geminiRunning) void sendCmd({ type: "checkGemini" });
+    onGeminiOnlyChange(on);
+    if (on && checkedCount === 0 && !snap.geminiRunning) {
+      void sendCmd({ type: "checkGemini" });
+    }
+  }
+  function handleRecheckGemini() {
+    if (!snap.geminiRunning) void sendCmd({ type: "checkGemini" });
   }
   const view = useMemo(
     () => (geminiOnly ? filterByGemini(snap.view, snap.gemini) : snap.view),
@@ -95,17 +155,14 @@ function NodesTab({ snap }: { snap: Snapshot }) {
           {snap.testAllRunning && <span className="loading loading-spinner loading-xs" />}
           测全部
         </button>
-        <label className="label cursor-pointer gap-1.5 text-sm">
-          <input
-            type="checkbox"
-            className="checkbox checkbox-sm"
-            checked={geminiOnly}
-            onChange={(e) => toggleGeminiOnly(e.target.checked)}
-            title="只看 Gemini 可用的节点（勾选即重新检测）"
-          />
-          Gemini 可用
-          {snap.geminiRunning && <span className="loading loading-spinner loading-xs" />}
-        </label>
+        <GeminiFilterControl
+          geminiOnly={geminiOnly}
+          running={snap.geminiRunning}
+          checkedCount={checkedCount}
+          totalCount={snap.view.nodes.length}
+          onToggle={toggleGeminiOnly}
+          onRecheck={handleRecheckGemini}
+        />
         <span className="ml-auto text-sm text-base-content/50">
           {view.nodes.length} 个节点 · {view.groups.length} 个组
         </span>
@@ -157,17 +214,25 @@ function NodesTab({ snap }: { snap: Snapshot }) {
         </div>
         {allOpen && (
           <div className="flex flex-col gap-1 px-3 pb-3">
-            {sortedAllNodes.map((node) => (
-              <NodeRow
-                key={node.name}
-                node={node}
-                testing={testing.has(node.name)}
-                failed={failed.has(node.name)}
-                busy={snap.testAllRunning}
-                clickable={false}
-                onTest={handleTest}
-              />
-            ))}
+            {sortedAllNodes.length === 0 && geminiOnly ? (
+              <div className="py-4 text-center text-sm text-base-content/50">
+                {snap.geminiRunning
+                  ? `正在检测 Gemini 可用性（已测 ${checkedCount}/${snap.view.nodes.length}）…`
+                  : "当前没有检测到 Gemini 可用节点，可点击「重测」再次检测。"}
+              </div>
+            ) : (
+              sortedAllNodes.map((node) => (
+                <NodeRow
+                  key={node.name}
+                  node={node}
+                  testing={testing.has(node.name)}
+                  failed={failed.has(node.name)}
+                  busy={snap.testAllRunning}
+                  clickable={false}
+                  onTest={handleTest}
+                />
+              ))
+            )}
           </div>
         )}
       </div>

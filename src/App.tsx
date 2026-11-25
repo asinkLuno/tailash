@@ -67,6 +67,7 @@ export default function App() {
     const hash = window.location.hash.slice(1).split("?")[0];
     return TABS.some((t) => t.id === hash) ? (hash as Tab) : "core";
   });
+  const [geminiOnly, setGeminiOnly] = useState(false);
 
   return (
     <div className="flex h-screen flex-col">
@@ -110,7 +111,13 @@ export default function App() {
         <div className="mx-auto flex max-w-xl flex-col gap-4">
           {tab === "core" && <CoreTab snap={snap} />}
           {tab === "subs" && <SubsTab snap={snap} />}
-          {tab === "nodes" && <NodesTab snap={snap} />}
+          {tab === "nodes" && (
+            <NodesTab
+              snap={snap}
+              geminiOnly={geminiOnly}
+              onGeminiOnlyChange={setGeminiOnly}
+            />
+          )}
         </div>
       </div>
 
