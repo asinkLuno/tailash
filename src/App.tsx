@@ -82,11 +82,9 @@ export default function App() {
         </div>
       </div>
 
-      {snap.message && (
-        <div className="bg-base-200 px-4 py-1.5 text-sm text-base-content/70">
-          {snap.message}
-        </div>
-      )}
+      <div className="bg-base-200 px-4 py-1.5 text-sm text-base-content/70">
+        {snap.message}
+      </div>
     </div>
   );
 }
