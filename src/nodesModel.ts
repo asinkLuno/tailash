@@ -131,16 +131,33 @@ export function buildNodesIndex(view: ProxyView): SharedMaps {
 
 /**
  * 只看 Gemini 可用的节点：节点表只留检测通过的，组内成员跟着收窄；
- * 组引用与内建项（DIRECT/REJECT）原样保留，收窄后空掉的组整张隐藏。
+ * 内建项（DIRECT/REJECT）与仍存活的组引用保留，收窄后空掉的组整张隐藏并级联移除其引用。
  */
 export function filterByGemini(view: ProxyView, gemini: Record<string, boolean>): ProxyView {
   const nodeNames = new Set(view.nodes.map((n) => n.name));
-  // 不在节点表里的成员是组引用或内建项（DIRECT/REJECT），一律保留
-  const keep = (member: string) => gemini[member] === true || !nodeNames.has(member);
+  const originalGroups = new Set(view.groups.map((g) => g.name));
+  let groups = view.groups.map((g) => ({
+    ...g,
+    members: g.members.filter((m) => gemini[m] === true || !nodeNames.has(m)),
+  }));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const alive = new Set(groups.filter((g) => g.members.length > 0).map((g) => g.name));
+    const next: GroupInfo[] = [];
+    for (const g of groups) {
+      if (g.members.length === 0) {
+        changed = true;
+        continue;
+      }
+      const members = g.members.filter((m) => !originalGroups.has(m) || alive.has(m));
+      if (members.length !== g.members.length) changed = true;
+      if (members.length > 0) next.push({ ...g, members });
+    }
+    groups = next;
+  }
   return {
     nodes: view.nodes.filter((n) => gemini[n.name] === true),
-    groups: view.groups
-      .map((g) => ({ ...g, members: g.members.filter(keep) }))
-      .filter((g) => g.members.length > 0),
+    groups,
   };
 }

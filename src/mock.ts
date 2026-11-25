@@ -204,10 +204,19 @@ export function mockSendCmd(cmd: Cmd): Promise<void> {
       break;
     }
     case "checkGemini": {
+      if (state.geminiRunning) {
+        state.message = "Gemini 检测已在进行";
+        break;
+      }
+      state.gemini = {};
+      const nodes = state.view.nodes;
+      if (nodes.length === 0) {
+        state.geminiRunning = false;
+        state.message = "Gemini 检测完成：0 个节点可用";
+        break;
+      }
       state.geminiRunning = true;
       state.message = "正在检测 Gemini…";
-      emit();
-      const nodes = state.view.nodes;
       nodes.forEach((n, index) => {
         window.setTimeout(
           () => {

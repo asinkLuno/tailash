@@ -204,22 +204,28 @@ export function hasTrafficChanged(prev: Snapshot, next: Snapshot): boolean {
   return prev.traffic !== next.traffic || prev.trafficHistory !== next.trafficHistory;
 }
 
+/** 非流量业务字段表：用编译期穷举避免 Snapshot 新增字段时漏掉变更检测。 */
+const APP_STATE_FIELDS: Record<Exclude<keyof Snapshot, "traffic" | "trafficHistory">, true> = {
+  coreRunning: true,
+  capMissing: true,
+  systemdAvailable: true,
+  mode: true,
+  tunEnabled: true,
+  view: true,
+  subs: true,
+  autoUpdateHours: true,
+  testing: true,
+  testAllRunning: true,
+  message: true,
+  failedDelays: true,
+  gemini: true,
+  geminiRunning: true,
+};
+const APP_STATE_KEYS = Object.keys(APP_STATE_FIELDS) as (keyof typeof APP_STATE_FIELDS)[];
+
 /** 检测除流量外的业务状态是否变化（用于隔离节点页与高频网速推送）。 */
 export function hasAppStateChanged(prev: Snapshot, next: Snapshot): boolean {
-  return (
-    prev.coreRunning !== next.coreRunning ||
-    prev.capMissing !== next.capMissing ||
-    prev.systemdAvailable !== next.systemdAvailable ||
-    prev.mode !== next.mode ||
-    prev.tunEnabled !== next.tunEnabled ||
-    prev.view !== next.view ||
-    prev.subs !== next.subs ||
-    prev.autoUpdateHours !== next.autoUpdateHours ||
-    prev.testing !== next.testing ||
-    prev.testAllRunning !== next.testAllRunning ||
-    prev.message !== next.message ||
-    prev.failedDelays !== next.failedDelays
-  );
+  return APP_STATE_KEYS.some((key) => prev[key] !== next[key]);
 }
 
 export interface LatestCoalescer<T> {

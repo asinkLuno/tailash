@@ -151,4 +151,28 @@ describe("filterByGemini", () => {
     assert.deepEqual(view.nodes.map((n) => n.name), ["可用", "不可用", "未测"]);
     assert.deepEqual(view.groups[0].members, ["可用", "不可用", "DIRECT"]);
   });
+
+  it("prunes references to groups that became empty, recursively", () => {
+    const nested: ProxyView = {
+      nodes: [node("可用"), node("不可用")],
+      groups: [
+        { name: "总选择", kind: "Selector", now: "地区组", members: ["地区组", "直连组", "可用"] },
+        { name: "地区组", kind: "Selector", now: "香港组", members: ["香港组"] },
+        { name: "香港组", kind: "URLTest", now: "不可用", members: ["不可用"] },
+        { name: "直连组", kind: "Selector", now: "DIRECT", members: ["DIRECT", "不可用"] },
+      ],
+    };
+    const out = filterByGemini(nested, { 可用: true, 不可用: false });
+    assert.deepEqual(
+      out.groups.map((g) => g.name),
+      ["总选择", "直连组"],
+      "空组与仅引用空组的父组都应隐藏",
+    );
+    assert.deepEqual(
+      out.groups[0].members,
+      ["直连组", "可用"],
+      "指向已被滤空组的引用不能残留在成员里",
+    );
+    assert.deepEqual(out.groups[1].members, ["DIRECT"]);
+  });
 });

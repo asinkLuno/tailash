@@ -37,6 +37,8 @@ function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
     testAllRunning: false,
     message: "已连接内核",
     failedDelays: [],
+    gemini: {},
+    geminiRunning: false,
     ...overrides,
   };
 }
@@ -273,6 +275,53 @@ describe("createSnapshotStore", () => {
     assert.equal(hasAppStateChanged(prev, off), true, "自动更新间隔变化要算业务状态变化");
     assert.equal(reconcileSnapshot(prev, off).autoUpdateHours, null);
     assert.equal(reconcileSnapshot(prev, makeSnapshot({ autoUpdateHours: 6 })), prev);
+  });
+
+  it("notifies app listeners on streaming gemini results and running flag changes", () => {
+    const initial = makeSnapshot({ gemini: {}, geminiRunning: true, message: "正在检测 Gemini…" });
+    const store = createSnapshotStore(initial);
+    let appNotifies = 0;
+    let trafficNotifies = 0;
+    const unsubApp = store.subscribeApp(() => appNotifies++);
+    const unsubTraffic = store.subscribeTraffic(() => trafficNotifies++);
+
+    // 增量写入一个节点结果（message 与其它字段均不变）
+    store.apply(
+      makeSnapshot({
+        gemini: { "HK-1": false },
+        geminiRunning: true,
+        message: "正在检测 Gemini…",
+      }),
+    );
+    assert.equal(appNotifies, 1, "gemini 增量结果必须触发业务状态通知");
+    assert.equal(trafficNotifies, 0);
+    assert.deepEqual(store.getApp().gemini, { "HK-1": false });
+
+    // 内容相同的重复快照应复用引用且不通知
+    const prevGeminiRef = store.getApp().gemini;
+    store.apply(
+      makeSnapshot({
+        gemini: { "HK-1": false },
+        geminiRunning: true,
+        message: "正在检测 Gemini…",
+      }),
+    );
+    assert.equal(appNotifies, 1);
+    assert.equal(store.getApp().gemini, prevGeminiRef);
+
+    // 仅 geminiRunning 翻转也必须通知
+    store.apply(
+      makeSnapshot({
+        gemini: { "HK-1": false },
+        geminiRunning: false,
+        message: "正在检测 Gemini…",
+      }),
+    );
+    assert.equal(appNotifies, 2, "geminiRunning 变化必须触发业务状态通知");
+    assert.equal(store.getApp().geminiRunning, false);
+
+    unsubApp();
+    unsubTraffic();
   });
 
   it("supports re-entrant push inside coalescer onFlush", () => {
