@@ -5,6 +5,7 @@
 //! - 重写 tun 段（开启 TUN + 排除 Tailscale 网段）
 //! - 重写 dns 段（fake-ip-filter 加 +.ts.net）
 //! - 在 rules 头部插入 tailnet 直连规则
+use crate::backend::gemini::{LISTENER_BASE_PORT, LISTENER_PREFIX};
 use anyhow::Result;
 use serde_yaml::Value;
 
@@ -137,6 +138,47 @@ pub fn generate(profile: &Value, socket_path: &str, tun_enabled: bool) -> Result
         }
     }
 
+    // ---- Gemini 检测入口：每个节点一个本地 listener，直连节点、绕开规则与用户选择 ----
+    // shortcut: listener 数量随节点数增长（端口 17890+N），节点上千时可改成单 listener + 切组
+    let mut listeners = cfg
+        .get("listeners")
+        .and_then(Value::as_sequence)
+        .cloned()
+        .unwrap_or_default();
+    for (index, proxy) in cfg
+        .get("proxies")
+        .and_then(Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let Some(name) = proxy.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let mut listener = serde_yaml::Mapping::new();
+        listener.insert(
+            Value::String("name".into()),
+            Value::String(format!("{LISTENER_PREFIX}{index}")),
+        );
+        listener.insert(Value::String("type".into()), Value::String("http".into()));
+        listener.insert(
+            Value::String("listen".into()),
+            Value::String("127.0.0.1".into()),
+        );
+        listener.insert(
+            Value::String("port".into()),
+            Value::Number((LISTENER_BASE_PORT as u64 + index as u64).into()),
+        );
+        listener.insert(
+            Value::String("proxy".into()),
+            Value::String(name.to_string()),
+        );
+        listeners.push(Value::Mapping(listener));
+    }
+    if !listeners.is_empty() {
+        cfg["listeners"] = Value::Sequence(listeners);
+    }
+
     let out = serde_yaml::to_string(&cfg)?;
     Ok(out)
 }
@@ -162,6 +204,22 @@ mod tests {
             cfg["rules"].as_sequence().unwrap().len(),
             n_rules + 4,
             "rules 应在头部追加 4 条 tailnet 直连"
+        );
+    }
+
+    #[test]
+    fn every_proxy_gets_a_gemini_probe_listener() {
+        let p = load_profile();
+        let n_proxies = p["proxies"].as_sequence().unwrap().len();
+        let out = generate(&p, "/tmp/tailash-mihomo.sock", true).unwrap();
+        let cfg: Value = serde_yaml::from_str(&out).unwrap();
+        let listeners = cfg["listeners"].as_sequence().unwrap();
+        assert_eq!(listeners.len(), n_proxies);
+        assert_eq!(listeners[0]["port"], LISTENER_BASE_PORT);
+        assert_eq!(
+            listeners[0]["proxy"],
+            p["proxies"][0]["name"].clone(),
+            "入口必须直连对应节点"
         );
     }
 

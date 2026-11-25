@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { GroupInfo, NodeInfo, ProxyView } from "./api.ts";
 import {
   buildNodesIndex,
+  filterByGemini,
   effectiveNow,
   parseSortMode,
   resolveChain,
@@ -115,5 +116,39 @@ describe("buildNodesIndex / effectiveNow / resolveChain", () => {
     assert.equal(byName.length, 500);
     assert.equal(byDelay.length, 500);
     assert.ok(elapsed < 30, `buildNodesIndex + sortNodes took ${elapsed.toFixed(2)}ms`);
+  });
+});
+
+describe("filterByGemini", () => {
+  const node = (name: string): NodeInfo => ({ name, kind: "Vmess", delay: 100, udp: true });
+  const view: ProxyView = {
+    nodes: [node("可用"), node("不可用"), node("未测")],
+    groups: [
+      { name: "节点选择", kind: "Selector", now: "可用", members: ["可用", "不可用", "DIRECT"] },
+      { name: "Gemini", kind: "Selector", now: "节点选择", members: ["节点选择"] },
+      { name: "空组", kind: "Selector", now: null, members: ["不可用"] },
+    ],
+  };
+  const filtered = filterByGemini(view, { 可用: true, 不可用: false });
+
+  it("keeps only available nodes, group refs and builtins", () => {
+    assert.deepEqual(
+      filtered.nodes.map((n) => n.name),
+      ["可用"],
+    );
+    assert.deepEqual(filtered.groups[0].members, ["可用", "DIRECT"]);
+    assert.deepEqual(filtered.groups[1].members, ["节点选择"]);
+  });
+
+  it("drops groups that become empty", () => {
+    assert.deepEqual(
+      filtered.groups.map((g) => g.name),
+      ["节点选择", "Gemini"],
+    );
+  });
+
+  it("does not mutate the input view", () => {
+    assert.deepEqual(view.nodes.map((n) => n.name), ["可用", "不可用", "未测"]);
+    assert.deepEqual(view.groups[0].members, ["可用", "不可用", "DIRECT"]);
   });
 });

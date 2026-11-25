@@ -31,6 +31,14 @@ function reconcileStringArray(prev: string[], next: string[]): string[] {
   return stringArraysEqual(prev, next) ? prev : next;
 }
 
+/** Gemini 检测结果是小表（节点名 → 是否可用），按内容比较避免每次轮询都换引用。 */
+function geminiEqual(a: Record<string, boolean> = {}, b: Record<string, boolean> = {}): boolean {
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key])
+  );
+}
+
 function nodeEqual(a: NodeInfo, b: NodeInfo): boolean {
   return (
     a.name === b.name &&
@@ -146,6 +154,7 @@ export function reconcileSnapshot(prev: Snapshot, next: Snapshot): Snapshot {
   const testing = reconcileStringArray(prev.testing, next.testing);
   const failedDelays = reconcileStringArray(prev.failedDelays, next.failedDelays);
 
+  const gemini = geminiEqual(prev.gemini, next.gemini) ? prev.gemini : next.gemini;
   const sameScalars =
     prev.coreRunning === next.coreRunning &&
     prev.capMissing === next.capMissing &&
@@ -154,6 +163,7 @@ export function reconcileSnapshot(prev: Snapshot, next: Snapshot): Snapshot {
     prev.tunEnabled === next.tunEnabled &&
     prev.testAllRunning === next.testAllRunning &&
     prev.autoUpdateHours === next.autoUpdateHours &&
+    prev.geminiRunning === next.geminiRunning &&
     prev.message === next.message;
 
   if (
@@ -163,7 +173,8 @@ export function reconcileSnapshot(prev: Snapshot, next: Snapshot): Snapshot {
     view === prev.view &&
     subs === prev.subs &&
     testing === prev.testing &&
-    failedDelays === prev.failedDelays
+    failedDelays === prev.failedDelays &&
+    gemini === prev.gemini
   ) {
     return prev;
   }
@@ -183,6 +194,8 @@ export function reconcileSnapshot(prev: Snapshot, next: Snapshot): Snapshot {
     testAllRunning: next.testAllRunning,
     message: next.message,
     failedDelays,
+    gemini,
+    geminiRunning: next.geminiRunning,
   };
 }
 

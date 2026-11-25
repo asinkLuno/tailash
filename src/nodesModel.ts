@@ -128,3 +128,19 @@ export function buildNodesIndex(view: ProxyView): SharedMaps {
   }
   return { groups, nodes, effectiveNows, resolved };
 }
+
+/**
+ * 只看 Gemini 可用的节点：节点表只留检测通过的，组内成员跟着收窄；
+ * 组引用与内建项（DIRECT/REJECT）原样保留，收窄后空掉的组整张隐藏。
+ */
+export function filterByGemini(view: ProxyView, gemini: Record<string, boolean>): ProxyView {
+  const nodeNames = new Set(view.nodes.map((n) => n.name));
+  // 不在节点表里的成员是组引用或内建项（DIRECT/REJECT），一律保留
+  const keep = (member: string) => gemini[member] === true || !nodeNames.has(member);
+  return {
+    nodes: view.nodes.filter((n) => gemini[n.name] === true),
+    groups: view.groups
+      .map((g) => ({ ...g, members: g.members.filter(keep) }))
+      .filter((g) => g.members.length > 0),
+  };
+}

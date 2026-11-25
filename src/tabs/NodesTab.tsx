@@ -5,7 +5,13 @@ import { sendCmd } from "../api";
 import type { Snapshot } from "../api";
 import GroupCard from "../components/GroupCard";
 import NodeRow from "../components/NodeRow";
-import { buildNodesIndex, parseSortMode, sortNodes, type SortMode } from "../nodesModel";
+import {
+  buildNodesIndex,
+  filterByGemini,
+  parseSortMode,
+  sortNodes,
+  type SortMode,
+} from "../nodesModel";
 
 const SORTS: { value: SortMode; label: string }[] = [
   { value: "subscription", label: "订阅顺序" },
@@ -36,15 +42,26 @@ function NodesTab({ snap }: { snap: Snapshot }) {
   }
   // 有策略组时默认折叠「全部节点」，避免上千个重复 DOM 行拖慢主线程；无策略组时自动展开
   const [allOpenOverride, setAllOpenOverride] = useState<boolean | null>(null);
-  const allOpen = allOpenOverride ?? snap.view.groups.length === 0;
 
-  const maps = useMemo(() => buildNodesIndex(snap.view), [snap.view]);
+  const [geminiOnly, setGeminiOnly] = useState(false);
+  // 勾选筛选即触发一轮检测：后端按节点各自的本地入口探测，结果逐节点流回快照
+  function toggleGeminiOnly(on: boolean) {
+    setGeminiOnly(on);
+    if (on && !snap.geminiRunning) void sendCmd({ type: "checkGemini" });
+  }
+  const view = useMemo(
+    () => (geminiOnly ? filterByGemini(snap.view, snap.gemini) : snap.view),
+    [geminiOnly, snap.view, snap.gemini],
+  );
+  // 按过滤后的组判断：筛选把所有组都滤空时，「全部节点」要自动展开，否则页面空一片
+  const allOpen = allOpenOverride ?? view.groups.length === 0;
+  const maps = useMemo(() => buildNodesIndex(view), [view]);
   // testing/failedDelays 全是 O(n) 的 includes，行渲染时逐行查会放大成 O(n²)；预构建成 Set
   const testing = useMemo(() => new Set(snap.testing), [snap.testing]);
   const failed = useMemo(() => new Set(snap.failedDelays), [snap.failedDelays]);
   const sortedAllNodes = useMemo(
-    () => (allOpen ? sortNodes(snap.view.nodes, sort) : []),
-    [allOpen, snap.view.nodes, sort],
+    () => (allOpen ? sortNodes(view.nodes, sort) : []),
+    [allOpen, view.nodes, sort],
   );
 
   if (!snap.coreRunning) {
@@ -78,12 +95,23 @@ function NodesTab({ snap }: { snap: Snapshot }) {
           {snap.testAllRunning && <span className="loading loading-spinner loading-xs" />}
           测全部
         </button>
+        <label className="label cursor-pointer gap-1.5 text-sm">
+          <input
+            type="checkbox"
+            className="checkbox checkbox-sm"
+            checked={geminiOnly}
+            onChange={(e) => toggleGeminiOnly(e.target.checked)}
+            title="只看 Gemini 可用的节点（勾选即重新检测）"
+          />
+          Gemini 可用
+          {snap.geminiRunning && <span className="loading loading-spinner loading-xs" />}
+        </label>
         <span className="ml-auto text-sm text-base-content/50">
-          {snap.view.nodes.length} 个节点 · {snap.view.groups.length} 个组
+          {view.nodes.length} 个节点 · {view.groups.length} 个组
         </span>
       </div>
 
-      {snap.view.groups.map((g, index) => (
+      {view.groups.map((g, index) => (
         <GroupCard
           key={g.name}
           testAllRunning={snap.testAllRunning}
@@ -124,7 +152,7 @@ function NodesTab({ snap }: { snap: Snapshot }) {
           </svg>
           <h2 className="text-base font-medium">全部节点</h2>
           <span className="ml-auto shrink-0 text-xs text-base-content/50">
-            {snap.view.nodes.length} 个节点
+            {view.nodes.length} 个节点
           </span>
         </div>
         {allOpen && (

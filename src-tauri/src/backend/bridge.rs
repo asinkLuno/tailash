@@ -24,6 +24,8 @@ pub enum UiCmd {
     TestNode {
         name: String,
     },
+    /// 逐个节点探测 Gemini 地区可用性（每节点一个本地入口）
+    CheckGemini,
     /// 拉取某条订阅（id 空则更新当前活动订阅）
     UpdateSub {
         id: String,
@@ -105,6 +107,10 @@ pub struct Snapshot {
     pub test_all_running: bool,
     pub message: String,
     pub failed_delays: Vec<String>,
+    /// Gemini 可用性检测结果（节点名 → 是否可用）；未检测的节点不在表里
+    pub gemini: std::collections::BTreeMap<String, bool>,
+    /// Gemini 检测进行中
+    pub gemini_running: bool,
 }
 
 impl Snapshot {
@@ -571,9 +577,78 @@ pub fn spawn_worker(
                         set_snap(&snapshot, |snap| snap.message = NOT_RUNNING.into());
                     }
                 }
+                UiCmd::CheckGemini => {
+                    if core.is_none() {
+                        set_snap(&snapshot, |snap| snap.message = NOT_RUNNING.into());
+                        continue;
+                    }
+                    if snapshot.read().unwrap().gemini_running {
+                        set_snap(&snapshot, |snap| {
+                            snap.message = "Gemini 检测已在进行".into()
+                        });
+                        continue;
+                    }
+                    let config_path = cfg.config_path();
+                    let ports = crate::backend::gemini::listeners(&config_path);
+                    if ports.is_empty() {
+                        set_snap(&snapshot, |snap| {
+                            snap.message = "Gemini 检测不可用：请重启内核后重试".into()
+                        });
+                        continue;
+                    }
+                    // 配置里有入口但内核还跑在旧配置上（升级后 systemd 里的内核没重启）：
+                    // 直接让内核按磁盘上的 config.yaml 重载一次，listeners 这时才绑定。
+                    // 配置文本没变，不用 reload_core 那套 stage + 失败回滚。
+                    if !crate::backend::gemini::listening(ports[0].1)
+                        && !crate::backend::gemini::restart_listeners(
+                            core.as_ref(),
+                            &config_path,
+                            ports[0].1,
+                        )
+                    {
+                        set_snap(&snapshot, |snap| {
+                            snap.message = "Gemini 检测需要内核加载新配置：请重启内核后再试".into()
+                        });
+                        continue;
+                    }
+                    set_snap(&snapshot, |snap| {
+                        // 清空上一轮：删掉的节点不该留在表里，检测中也只显示本轮结果
+                        snap.gemini.clear();
+                        snap.gemini_running = true;
+                        snap.message = "正在检测 Gemini…".into();
+                    });
+                    launch_gemini_scan(snapshot.clone(), ports);
+                }
             }
         }
     })
+}
+
+/// 同时探测的节点数：每个探测是一个最长 15s 的 curl，别一次性拉起几百个。
+const GEMINI_PROBES_AT_ONCE: usize = 6;
+
+/// 逐批探测每个节点的 Gemini 本地入口；结果按节点名写回快照。
+fn launch_gemini_scan(snapshot: SharedSnapshot, ports: Vec<(String, u16)>) {
+    std::thread::spawn(move || {
+        let snapshot = &snapshot;
+        for chunk in ports.chunks(GEMINI_PROBES_AT_ONCE) {
+            std::thread::scope(|scope| {
+                for (name, port) in chunk {
+                    scope.spawn(move || {
+                        let ok = crate::backend::gemini::probe(*port);
+                        set_snap(snapshot, |snap| {
+                            snap.gemini.insert(name.clone(), ok);
+                        });
+                    });
+                }
+            });
+        }
+        set_snap(snapshot, |snap| {
+            snap.gemini_running = false;
+            let available = snap.gemini.values().filter(|ok| **ok).count();
+            snap.message = format!("Gemini 检测完成：{available} 个节点可用");
+        });
+    });
 }
 
 fn delay_summary(succeeded: usize, failed: usize) -> String {

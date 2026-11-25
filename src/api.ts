@@ -77,6 +77,10 @@ export interface Snapshot {
   testAllRunning: boolean;
   message: string;
   failedDelays: string[];
+  /** Gemini 可用性检测结果（节点名 → 是否可用）；未检测过的不在表里 */
+  gemini: Record<string, boolean>;
+  /** Gemini 检测进行中 */
+  geminiRunning: boolean;
 }
 
 export type Cmd =
@@ -87,6 +91,7 @@ export type Cmd =
   | { type: "select"; group: string; node: string }
   | { type: "testAll" }
   | { type: "testNode"; name: string }
+  | { type: "checkGemini" }
   | { type: "updateSub"; id: string }
   | { type: "addSub"; name: string; url: string }
   | { type: "removeSub"; id: string }
@@ -110,6 +115,8 @@ const emptySnapshot: Snapshot = {
   testAllRunning: false,
   message: "正在连接…",
   failedDelays: [],
+  gemini: {},
+  geminiRunning: false,
 };
 
 export async function sendCmd(cmd: Cmd): Promise<void> {

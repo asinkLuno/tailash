@@ -41,6 +41,8 @@ pub enum Cmd {
     TestNode {
         name: String,
     },
+    /// 逐个节点经各自的本地入口探测 Gemini 地区可用性（不改当前选择）
+    CheckGemini,
     /// 更新某条订阅（id 空则更新当前活动订阅）
     UpdateSub {
         id: String,
@@ -74,6 +76,7 @@ impl From<Cmd> for UiCmd {
             Cmd::Select { group, node } => Self::Select { group, node },
             Cmd::TestAll => Self::TestAll,
             Cmd::TestNode { name } => Self::TestNode { name },
+            Cmd::CheckGemini => Self::CheckGemini,
             Cmd::UpdateSub { id } => Self::UpdateSub { id },
             Cmd::AddSub { name, url } => Self::AddSub { name, url },
             Cmd::RemoveSub { id } => Self::RemoveSub { id },

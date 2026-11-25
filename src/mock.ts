@@ -85,6 +85,8 @@ export function mockDefaultSnapshot(): Snapshot {
     testAllRunning: false,
     message: "已连接内核（mock 模式，命令只作用于演示数据）",
     failedDelays: ["新加坡SG-A", "美国USLA-A"],
+    gemini: {},
+    geminiRunning: false,
   };
 }
 
@@ -199,6 +201,28 @@ export function mockSendCmd(cmd: Cmd): Promise<void> {
         state.testing = state.testing.filter((t) => t !== cmd.name);
         emit();
       }, 600 + Math.random() * 600);
+      break;
+    }
+    case "checkGemini": {
+      state.geminiRunning = true;
+      state.message = "正在检测 Gemini…";
+      emit();
+      const nodes = state.view.nodes;
+      nodes.forEach((n, index) => {
+        window.setTimeout(
+          () => {
+            // 演示：三分之二的节点可用
+            state.gemini = { ...state.gemini, [n.name]: index % 3 !== 2 };
+            if (index === nodes.length - 1) {
+              state.geminiRunning = false;
+              const available = Object.values(state.gemini).filter(Boolean).length;
+              state.message = `Gemini 检测完成：${available} 个节点可用`;
+            }
+            emit();
+          },
+          300 + index * 120,
+        );
+      });
       break;
     }
     case "addSub":
