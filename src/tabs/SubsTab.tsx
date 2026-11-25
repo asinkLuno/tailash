@@ -18,7 +18,7 @@ export default function SubsTab({ snap }: { snap: Snapshot }) {
     e.preventDefault();
     const trimmed = url.trim();
     if (!trimmed) return;
-    sendCmd({ type: "addSub", name: name.trim() || "未命名订阅", url: trimmed });
+    sendCmd({ type: "addSub", name: name.trim(), url: trimmed });
     setName("");
     setUrl("");
   }
@@ -30,8 +30,8 @@ export default function SubsTab({ snap }: { snap: Snapshot }) {
           <h2 className="card-title text-base">添加订阅</h2>
           <div className="flex flex-col gap-2 sm:flex-row">
             <input
-              className="input input-sm w-full sm:w-36"
-              placeholder="名称（可选）"
+              className="input input-sm w-full sm:w-44"
+              placeholder="名称（留空自动获取）"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />

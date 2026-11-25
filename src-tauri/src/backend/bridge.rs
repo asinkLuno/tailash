@@ -615,11 +615,18 @@ fn launch_sub_fetch(
 ) {
     std::thread::spawn(move || {
         use anyhow::Context as _;
+        let mut name = name;
         let result = (|| -> anyhow::Result<String> {
-            let text = crate::backend::subscription::fetch_subscribe(&url)?;
-            crate::backend::subscription::validate_profile_text(&text)
+            let fetched = crate::backend::subscription::fetch_subscribe(&url)?;
+            crate::backend::subscription::validate_profile_text(&fetched.text)
                 .context("校验订阅失败")?;
-            Ok(text)
+            // 新增时名称为空 → 用订阅响应头自报的名字，仍没有才叫未命名
+            if let Some(slot) = name.as_mut()
+                && slot.trim().is_empty()
+            {
+                *slot = fetched.name.unwrap_or_else(|| "未命名订阅".into());
+            }
+            Ok(fetched.text)
         })()
         .map_err(|e| format!("{e:#}"));
         // 无论成败都回执 worker，由它统一收尾（更新 UI 状态 / 释放进行中标志）

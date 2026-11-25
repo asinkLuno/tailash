@@ -144,13 +144,29 @@ pub fn validate_profile_text(text: &str) -> Result<()> {
     Ok(())
 }
 
-/// 下载订阅（系统 curl，校验 TLS 证书，固定 UA 走 Clash 配置分支）
-pub fn fetch_subscribe(url: &str) -> Result<String> {
+/// 下载结果：profile 文本 + 订阅在响应头里自报的名称（没报则 None）。
+pub struct FetchedSub {
+    pub text: String,
+    pub name: Option<String>,
+}
+
+/// 下载订阅（系统 curl，校验 TLS 证书，固定 UA 走 Clash 配置分支）。
+/// 顺手取响应头里的订阅名：`profile-title`（可带 base64: 前缀）或
+/// Content-Disposition 的 filename，多数机场/转换器会带其中一个。
+pub fn fetch_subscribe(url: &str) -> Result<FetchedSub> {
     anyhow::ensure!(!url.trim().is_empty(), "订阅地址为空");
     anyhow::ensure!(
         url.trim().starts_with("https://") || url.trim().starts_with("http://"),
         "订阅地址须以 http(s):// 开头"
     );
+    let header_path = std::env::temp_dir().join(format!(
+        "tailash-sub-{}-{}.headers",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
     let out = std::process::Command::new("curl")
         .args([
             "-fsSL",
@@ -162,18 +178,120 @@ pub fn fetch_subscribe(url: &str) -> Result<String> {
             &MAX_BODY_BYTES.to_string(),
             "-A",
             "clash-verge/v1.7.7",
+            "-D",
         ])
+        .arg(&header_path)
         .arg(url.trim())
-        .output()
-        .context("启动 curl 失败（系统未安装 curl?）")?;
+        .output();
+    let headers = std::fs::read_to_string(&header_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&header_path);
+    let out = out.context("启动 curl 失败（系统未安装 curl?）")?;
     anyhow::ensure!(out.status.success(), "下载失败（curl {}）", out.status);
     anyhow::ensure!(out.stdout.len() as u64 <= MAX_BODY_BYTES, "订阅响应过大");
-    String::from_utf8(out.stdout).map_err(|_| anyhow::anyhow!("订阅响应不是合法 UTF-8"))
+    let text = String::from_utf8(out.stdout).map_err(|_| anyhow::anyhow!("订阅响应不是合法 UTF-8"))?;
+    Ok(FetchedSub {
+        text,
+        name: parse_sub_name(&headers),
+    })
+}
+
+/// 从响应头解析订阅自报的名称；重定向链取最后一个响应。
+pub fn parse_sub_name(headers: &str) -> Option<String> {
+    let header = |key: &str| {
+        headers.lines().rev().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case(key)
+                .then(|| value.trim())
+        })
+    };
+    if let Some(raw) = header("profile-title") {
+        let plain = raw
+            .get(..7)
+            .filter(|prefix| prefix.eq_ignore_ascii_case("base64:"))
+            .map(|_| decode_base64(&raw[7..]))
+            .unwrap_or(None);
+        if let Some(name) = clean_name(plain.as_deref().unwrap_or(raw)) {
+            return Some(name);
+        }
+    }
+    header("content-disposition").and_then(disposition_name)
+}
+
+/// `attachment; filename="x"; filename*=UTF-8''y` → y（百分号解码），否则 x。
+fn disposition_name(value: &str) -> Option<String> {
+    let mut fallback = None;
+    for part in value.split(';').skip(1) {
+        let part = part.trim();
+        if let Some(rest) = part.strip_prefix("filename*=") {
+            let raw = rest.split("''").nth(1).unwrap_or(rest);
+            if let Some(name) = clean_name(&percent_decode(raw.trim_matches('"'))) {
+                return Some(name);
+            }
+        } else if let Some(rest) = part.strip_prefix("filename=") {
+            fallback = clean_name(rest.trim_matches('"'));
+        }
+    }
+    fallback
+}
+
+/// 名称只做展示：去控制字符、去空白、限长，避免响应头塞进超长或换行内容。
+fn clean_name(raw: &str) -> Option<String> {
+    let name: String = raw.chars().filter(|c| !c.is_control()).collect();
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.chars().take(60).collect())
+}
+
+fn decode_base64(text: &str) -> Option<String> {
+    let mut out = Vec::new();
+    let mut acc = 0u32;
+    let mut bits = 0u32;
+    for byte in text.bytes().filter(|b| !b.is_ascii_whitespace()) {
+        if byte == b'=' {
+            break;
+        }
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32;
+        acc = (acc << 6) | value;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if bytes[i] == b'%'
+            && let Some(pair) = bytes.get(i + 1..i + 3)
+            && let (Some(hi), Some(lo)) = (hex(pair[0]), hex(pair[1]))
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// 下载并验证订阅，写入候选文件；由调用方在热重载成功后提交。
 pub fn stage_profile_file(url: &str, profile_path: &Path) -> Result<String> {
-    let text = fetch_subscribe(url)?;
+    let text = fetch_subscribe(url)?.text;
     validate_profile_text(&text).context("校验订阅失败")?;
     if let Some(parent) = profile_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -366,6 +484,54 @@ mod tests {
         assert_eq!(std::fs::read_to_string(old).unwrap(), "old");
         thread.join().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn parses_sub_name_from_headers() {
+        assert_eq!(parse_sub_name("profile-title: 机场A\r\n"), Some("机场A".into()));
+        assert_eq!(
+            parse_sub_name("profile-title: base64:5py65Zy6QQ==\r\n"),
+            Some("机场A".into())
+        );
+        // 重定向链：取最后一个响应的头
+        assert_eq!(
+            parse_sub_name("profile-title: 旧\r\nprofile-title: 新\r\n"),
+            Some("新".into())
+        );
+        assert_eq!(
+            parse_sub_name(
+                "Content-Disposition: attachment; filename*=UTF-8''%E6%9C%BA%E5%9C%BA%41.yaml; filename=\"sub.yaml\"\r\n"
+            ),
+            Some("机场A.yaml".into())
+        );
+        assert_eq!(
+            parse_sub_name("Content-Disposition: attachment; filename=\"sub.yaml\"\r\n"),
+            Some("sub.yaml".into())
+        );
+        assert_eq!(parse_sub_name("HTTP/1.1 200 OK\r\n"), None);
+        assert_eq!(parse_sub_name("profile-title: base64:%%%\r\n"), Some("base64:%%%".into()));
+    }
+
+    #[test]
+    fn fetch_takes_name_from_response_headers() {
+        use std::io::{Read, Write};
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/sub", server.local_addr().unwrap());
+        let thread = std::thread::spawn(move || {
+            let (mut socket, _) = server.accept().unwrap();
+            socket.read(&mut [0; 4096]).unwrap();
+            let body = "proxies: [node]\n";
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nprofile-title: base64:5py65Zy6QQ==\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let fetched = fetch_subscribe(&url).unwrap();
+        thread.join().unwrap();
+        assert_eq!(fetched.name.as_deref(), Some("机场A"));
+        assert!(fetched.text.contains("proxies"));
     }
 
     #[test]
