@@ -67,8 +67,8 @@ rules:
         std::fs::create_dir_all(&workdir).unwrap();
 
         // 1. 假代理：延后 10s 才监听，内核启动时的组测试必然全失败
-        let proxy_script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/fake_proxy.py");
+        let proxy_script =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_proxy.py");
         let mut python = std::process::Command::new("python3")
             .arg("-I")
             .arg(&proxy_script)
@@ -94,9 +94,8 @@ rules:
         // 3. 覆写 config.yaml：关掉 TUN（探针不需要接管路由，免 cap）
         let profile: serde_yaml::Value =
             serde_yaml::from_str(PROFILE).expect("parse probe profile");
-        let config_text =
-            tailash_lib::backend::runtime::render_config(&cfg, &profile, Some(false))
-                .expect("render probe config");
+        let config_text = tailash_lib::backend::runtime::render_config(&cfg, &profile, Some(false))
+            .expect("render probe config");
         std::fs::write(cfg.config_path(), config_text).unwrap();
 
         // 4. 启动内核（此时假代理还没就绪 → 内核首次组测试失败）
@@ -124,8 +123,11 @@ rules:
             .cloned()
             .expect("url-test 组应在节点视图里");
         assert_eq!(group.kind, "URLTest", "组类型来自内核");
-        assert_eq!(group.now.as_deref(), Some("FA-慢"),
-            "内核首次组测试全失败时 fastNode 应停在首个成员（慢）——这是用户看到「没选最小」的现场");
+        assert_eq!(
+            group.now.as_deref(),
+            Some("FA-慢"),
+            "内核首次组测试全失败时 fastNode 应停在首个成员（慢）——这是用户看到「没选最小」的现场"
+        );
 
         // 5. 假代理就绪后测全部
         assert!(wait_port(18001, Duration::from_secs(20)), "假代理应就绪");

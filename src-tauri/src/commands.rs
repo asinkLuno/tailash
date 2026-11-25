@@ -3,8 +3,8 @@
 use serde::Deserialize;
 use tauri::State;
 
-use crate::backend::bridge::Snapshot;
 use crate::backend::bridge::SharedSnapshot;
+use crate::backend::bridge::Snapshot;
 use crate::backend::bridge::UiCmd;
 use crate::backend::mihomo_api::ProxyMode;
 
@@ -25,23 +25,43 @@ pub enum Cmd {
     ToggleCore,
     /// mihomo 缺 cap_net_admin 时经 pkexec 补授权
     GrantCap,
-    ToggleTun { on: bool },
-    SetMode { mode: ProxyMode },
+    ToggleTun {
+        on: bool,
+    },
+    SetMode {
+        mode: ProxyMode,
+    },
     /// 在某个组里选中某个节点
-    Select { group: String, node: String },
+    Select {
+        group: String,
+        node: String,
+    },
     TestAll,
     /// 测单个节点延迟
-    TestNode { name: String },
+    TestNode {
+        name: String,
+    },
     /// 更新某条订阅（id 空则更新当前活动订阅）
-    UpdateSub { id: String },
+    UpdateSub {
+        id: String,
+    },
     /// 添加订阅（下载校验通过后登记；第一条自动启用）
-    AddSub { name: String, url: String },
+    AddSub {
+        name: String,
+        url: String,
+    },
     /// 删除某条订阅
-    RemoveSub { id: String },
+    RemoveSub {
+        id: String,
+    },
     /// 切换活动订阅
-    SwitchSub { id: String },
+    SwitchSub {
+        id: String,
+    },
     /// 自动更新间隔（小时；null 或 0 = 关闭）
-    SetAutoUpdate { hours: Option<u64> },
+    SetAutoUpdate {
+        hours: Option<u64>,
+    },
 }
 
 impl From<Cmd> for UiCmd {

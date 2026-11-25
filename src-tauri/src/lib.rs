@@ -110,7 +110,10 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::send_cmd, commands::get_snapshot])
+        .invoke_handler(tauri::generate_handler![
+            commands::send_cmd,
+            commands::get_snapshot
+        ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| match event {

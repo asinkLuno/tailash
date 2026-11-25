@@ -65,7 +65,10 @@ pub fn load_settings(data_dir: &Path) -> Settings {
 
 /// 订阅 id 只能进入文件名，白名单字符，挡住 settings.json 被手改成路径穿越。
 pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    !id.is_empty()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// 生成新订阅 id（纳秒时间戳，十六进制，天然满足 valid_id）。
@@ -204,7 +207,8 @@ pub fn fetch_subscribe(url: &str) -> Result<FetchedSub> {
     let out = out.context("启动 curl 失败（系统未安装 curl?）")?;
     anyhow::ensure!(out.status.success(), "下载失败（curl {}）", out.status);
     anyhow::ensure!(out.stdout.len() as u64 <= MAX_BODY_BYTES, "订阅响应过大");
-    let text = String::from_utf8(out.stdout).map_err(|_| anyhow::anyhow!("订阅响应不是合法 UTF-8"))?;
+    let text =
+        String::from_utf8(out.stdout).map_err(|_| anyhow::anyhow!("订阅响应不是合法 UTF-8"))?;
     Ok(FetchedSub {
         text,
         name: parse_sub_name(&headers),
@@ -216,9 +220,7 @@ pub fn parse_sub_name(headers: &str) -> Option<String> {
     let header = |key: &str| {
         headers.lines().rev().find_map(|line| {
             let (name, value) = line.split_once(':')?;
-            name.trim()
-                .eq_ignore_ascii_case(key)
-                .then(|| value.trim())
+            name.trim().eq_ignore_ascii_case(key).then(|| value.trim())
         })
     };
     if let Some(raw) = header("profile-title") {
@@ -410,7 +412,8 @@ mod tests {
 
     #[test]
     fn migration_skipped_when_no_legacy_url() {
-        let dir = std::env::temp_dir().join(format!("tailash-migrate-empty-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("tailash-migrate-empty-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let s = Settings::default();
         assert_eq!(migrate_legacy(s.clone(), &dir), s);
@@ -422,10 +425,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tailash-subfile-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         save_sub_profile(&dir, "s1", "proxies: []\n").unwrap();
-        assert_eq!(load_sub_profile(&dir, "s1").as_deref(), Some("proxies: []\n"));
+        assert_eq!(
+            load_sub_profile(&dir, "s1").as_deref(),
+            Some("proxies: []\n")
+        );
         // 覆盖写
         save_sub_profile(&dir, "s1", "proxies: [n]\n").unwrap();
-        assert_eq!(load_sub_profile(&dir, "s1").as_deref(), Some("proxies: [n]\n"));
+        assert_eq!(
+            load_sub_profile(&dir, "s1").as_deref(),
+            Some("proxies: [n]\n")
+        );
         assert!(load_sub_profile(&dir, "missing").is_none());
         remove_sub_profile(&dir, "s1");
         assert!(load_sub_profile(&dir, "s1").is_none());
@@ -508,7 +517,10 @@ mod tests {
 
     #[test]
     fn parses_sub_name_from_headers() {
-        assert_eq!(parse_sub_name("profile-title: 机场A\r\n"), Some("机场A".into()));
+        assert_eq!(
+            parse_sub_name("profile-title: 机场A\r\n"),
+            Some("机场A".into())
+        );
         assert_eq!(
             parse_sub_name("profile-title: base64:5py65Zy6QQ==\r\n"),
             Some("机场A".into())
@@ -529,7 +541,10 @@ mod tests {
             Some("sub.yaml".into())
         );
         assert_eq!(parse_sub_name("HTTP/1.1 200 OK\r\n"), None);
-        assert_eq!(parse_sub_name("profile-title: base64:%%%\r\n"), Some("base64:%%%".into()));
+        assert_eq!(
+            parse_sub_name("profile-title: base64:%%%\r\n"),
+            Some("base64:%%%".into())
+        );
     }
 
     #[test]

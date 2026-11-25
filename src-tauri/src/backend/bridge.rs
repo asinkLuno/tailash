@@ -21,17 +21,30 @@ pub enum UiCmd {
     },
     TestAll,
     /// 测单个节点延迟
-    TestNode { name: String },
+    TestNode {
+        name: String,
+    },
     /// 拉取某条订阅（id 空则更新当前活动订阅）
-    UpdateSub { id: String },
+    UpdateSub {
+        id: String,
+    },
     /// 添加订阅（下载校验通过后由 worker 登记）
-    AddSub { name: String, url: String },
+    AddSub {
+        name: String,
+        url: String,
+    },
     /// 删除某条订阅（连同其内容文件）
-    RemoveSub { id: String },
+    RemoveSub {
+        id: String,
+    },
     /// 切换活动订阅（内核在跑则热重载，否则物化 profile 供下次启动）
-    SwitchSub { id: String },
+    SwitchSub {
+        id: String,
+    },
     /// 设置自动更新间隔（小时；None 或 0 = 关闭）
-    SetAutoUpdate { hours: Option<u64> },
+    SetAutoUpdate {
+        hours: Option<u64>,
+    },
     /// 下载线程 → worker：订阅内容已下载并校验，由 worker 统一落盘/改 settings。
     /// id 为 None 表示新增订阅（此时 name/url 必有）；Ok 携带 profile 文本。
     SubFetched {
@@ -123,32 +136,30 @@ pub fn spawn_worker(
             snap.cap_missing = cap_missing;
             snap.systemd_available = systemd_available;
         });
-            // 订阅登记：读 settings.json（旧版单订阅自动迁移成一条订阅）；
-            // 活动订阅的内容还没物化成 profile.yaml 就补上，保证接下来启动的内核用得上。
-            let mut settings = {
-                let raw = crate::backend::subscription::load_settings(&cfg.workdir);
-                let migrated =
-                    crate::backend::subscription::migrate_legacy(raw.clone(), &cfg.workdir);
-                if migrated != raw
-                    && let Err(e) =
-                        crate::backend::subscription::save_settings(&cfg.workdir, &migrated)
-                {
-                    eprintln!("保存迁移后的订阅设置失败: {e}");
-                }
-                migrated
-            };
-            if let Some(active) = settings.active.clone()
-                && let Some(text) =
-                    crate::backend::subscription::load_sub_profile(&cfg.workdir, &active)
-                && !cfg.profile_path.is_file()
+        // 订阅登记：读 settings.json（旧版单订阅自动迁移成一条订阅）；
+        // 活动订阅的内容还没物化成 profile.yaml 就补上，保证接下来启动的内核用得上。
+        let mut settings = {
+            let raw = crate::backend::subscription::load_settings(&cfg.workdir);
+            let migrated = crate::backend::subscription::migrate_legacy(raw.clone(), &cfg.workdir);
+            if migrated != raw
+                && let Err(e) = crate::backend::subscription::save_settings(&cfg.workdir, &migrated)
             {
-                let _ = std::fs::write(&cfg.profile_path, &text);
+                eprintln!("保存迁移后的订阅设置失败: {e}");
             }
-            set_snap(&snapshot, |snap| {
-                snap.subs = sub_status_list(&settings);
-                snap.auto_update_hours = settings.auto_update_hours;
-            });
-            link.poll(&cfg, &snapshot, &mut delay_cancel);
+            migrated
+        };
+        if let Some(active) = settings.active.clone()
+            && let Some(text) =
+                crate::backend::subscription::load_sub_profile(&cfg.workdir, &active)
+            && !cfg.profile_path.is_file()
+        {
+            let _ = std::fs::write(&cfg.profile_path, &text);
+        }
+        set_snap(&snapshot, |snap| {
+            snap.subs = sub_status_list(&settings);
+            snap.auto_update_hours = settings.auto_update_hours;
+        });
+        link.poll(&cfg, &snapshot, &mut delay_cancel);
         // 按当前订阅刷新 config.yaml，让接下来启动的内核用上最新订阅。
         if cfg.profile_path.is_file()
             && let Err(e) = crate::backend::runtime::write_config(&cfg)
@@ -338,7 +349,11 @@ pub fn spawn_worker(
                             let (count, activate) = match outcome {
                                 Ok(pair) => pair,
                                 Err(e) => {
-                                    let prefix = if adding { "订阅添加失败" } else { "订阅更新失败" };
+                                    let prefix = if adding {
+                                        "订阅添加失败"
+                                    } else {
+                                        "订阅更新失败"
+                                    };
                                     set_snap(&snapshot, |snap| {
                                         snap.message = format!("{prefix}: {e:#}")
                                     });
@@ -360,7 +375,11 @@ pub fn spawn_worker(
                                     snap.view = v;
                                     snap.failed_delays.clear();
                                 }
-                                let prefix = if adding { "订阅已添加" } else { "订阅已更新" };
+                                let prefix = if adding {
+                                    "订阅已添加"
+                                } else {
+                                    "订阅已更新"
+                                };
                                 snap.message = match (&committed, activate, core.is_some()) {
                                     (Err(e), _, _) => format!("{prefix}，但重载失败: {e:#}"),
                                     (_, false, _) => prefix.into(),
@@ -372,7 +391,11 @@ pub fn spawn_worker(
                             });
                         }
                         Err(e) => set_snap(&snapshot, |snap| {
-                            let prefix = if adding { "订阅添加失败" } else { "订阅更新失败" };
+                            let prefix = if adding {
+                                "订阅添加失败"
+                            } else {
+                                "订阅更新失败"
+                            };
                             snap.message = format!("{prefix}: {e}");
                         }),
                     }
@@ -384,7 +407,9 @@ pub fn spawn_worker(
                         Some(id)
                     };
                     let Some(sub_id) = sub_id else {
-                        set_snap(&snapshot, |snap| snap.message = "还没有订阅，请先添加".into());
+                        set_snap(&snapshot, |snap| {
+                            snap.message = "还没有订阅，请先添加".into()
+                        });
                         continue;
                     };
                     let Some(meta) = settings.subscriptions.iter().find(|s| s.id == sub_id) else {
@@ -417,7 +442,9 @@ pub fn spawn_worker(
                     if settings.active.as_deref() == Some(id.as_str()) {
                         settings.active = None;
                     }
-                    if let Err(e) = crate::backend::subscription::save_settings(&cfg.workdir, &settings) {
+                    if let Err(e) =
+                        crate::backend::subscription::save_settings(&cfg.workdir, &settings)
+                    {
                         eprintln!("保存订阅设置失败: {e}");
                     }
                     set_snap(&snapshot, |snap| {
@@ -426,7 +453,11 @@ pub fn spawn_worker(
                     });
                 }
                 UiCmd::SwitchSub { id } => {
-                    let meta = settings.subscriptions.iter().find(|s| s.id == id).map(|s| s.name.clone());
+                    let meta = settings
+                        .subscriptions
+                        .iter()
+                        .find(|s| s.id == id)
+                        .map(|s| s.name.clone());
                     let Some(name) = meta else {
                         set_snap(&snapshot, |snap| snap.message = "订阅不存在".into());
                         continue;
@@ -501,16 +532,16 @@ pub fn spawn_worker(
                             .collect();
                         let cancel = Arc::new(AtomicBool::new(false));
                         delay_cancel = Some(cancel.clone());
-        set_snap(&snapshot, |snap| {
-            snap.message = "测延迟中…".into();
-            snap.failed_delays.clear();
-            snap.test_all_running = true;
-            // 点击测全部即清空旧延迟：测试期间未出结果的节点显示「未测」
-            for node in &mut snap.view.nodes {
-                node.delay = None;
-            }
-        });
-        launch_delay_test(
+                        set_snap(&snapshot, |snap| {
+                            snap.message = "测延迟中…".into();
+                            snap.failed_delays.clear();
+                            snap.test_all_running = true;
+                            // 点击测全部即清空旧延迟：测试期间未出结果的节点显示「未测」
+                            for node in &mut snap.view.nodes {
+                                node.delay = None;
+                            }
+                        });
+                        launch_delay_test(
                             c.clone(),
                             snapshot.clone(),
                             names,
@@ -551,10 +582,7 @@ fn delay_summary(succeeded: usize, failed: usize) -> String {
 
 /// 测速完成后回拉一次 /proxies 同步各组的 now：
 /// url-test 组在内核里按成员实时延迟动态选最小，个别节点测完它的选择就可能变。
-fn refresh_group_now(
-    client: &crate::backend::mihomo_api::MihomoClient,
-    snapshot: &SharedSnapshot,
-) {
+fn refresh_group_now(client: &crate::backend::mihomo_api::MihomoClient, snapshot: &SharedSnapshot) {
     if let Ok(entries) = client.proxies() {
         set_snap(snapshot, |snap| {
             for group in &mut snap.view.groups {
@@ -619,8 +647,10 @@ fn launch_delay_test(
                         failed.fetch_add(1, Ordering::Relaxed);
                         set_snap(&snapshot, |snap| {
                             // 失败写入错误哨兵值：UI 分档显示「失败」（区别于未测），排序在超时后、未测前
-                            snap.view
-                                .set_delay(&name, Some(crate::backend::proxy_view::IMPLAUSIBLE_DELAY));
+                            snap.view.set_delay(
+                                &name,
+                                Some(crate::backend::proxy_view::IMPLAUSIBLE_DELAY),
+                            );
                             if !snap.is_failed(&name) {
                                 snap.failed_delays.push(name.clone());
                             }
@@ -639,9 +669,7 @@ fn launch_delay_test(
                         .view
                         .groups
                         .iter()
-                        .filter(|group| {
-                            group.kind.replace('-', "").eq_ignore_ascii_case("urltest")
-                        })
+                        .filter(|group| group.kind.replace('-', "").eq_ignore_ascii_case("urltest"))
                         .map(|group| group.name.clone())
                         .collect();
                     for name in &urltest_groups {
@@ -752,8 +780,7 @@ fn sub_status_list(settings: &crate::backend::subscription::Settings) -> Vec<Sub
 /// 数 profile 文本里的节点数（校验已保证 proxies 非空）。
 fn count_proxies(text: &str) -> anyhow::Result<usize> {
     use anyhow::Context as _;
-    let profile: serde_yaml::Value =
-        serde_yaml::from_str(text).context("解析订阅失败")?;
+    let profile: serde_yaml::Value = serde_yaml::from_str(text).context("解析订阅失败")?;
     Ok(profile
         .get("proxies")
         .and_then(|v| v.as_sequence())
@@ -1020,10 +1047,7 @@ impl CoreLink {
     }
 }
 
-fn push_traffic_sample(
-    snap: &mut Snapshot,
-    mut sample: crate::backend::mihomo_api::TrafficSample,
-) {
+fn push_traffic_sample(snap: &mut Snapshot, mut sample: crate::backend::mihomo_api::TrafficSample) {
     // 兼容旧版内核：未提供 upTotal/downTotal 时自行累计。
     if sample.up_total == 0 && sample.down_total == 0 {
         sample.up_total = snap.traffic.up_total.saturating_add(sample.up);
@@ -1186,8 +1210,15 @@ mod tests {
     fn second_added_sub_does_not_steal_activation() {
         let dir = temp_dir("apply-second");
         let mut settings = crate::backend::subscription::Settings::default();
-        apply_fetched_sub(&mut settings, &dir, None, Some("A"), Some("https://a"), &sample_text(1))
-            .unwrap();
+        apply_fetched_sub(
+            &mut settings,
+            &dir,
+            None,
+            Some("A"),
+            Some("https://a"),
+            &sample_text(1),
+        )
+        .unwrap();
         let first_active = settings.active.clone();
         let (_, activate) = apply_fetched_sub(
             &mut settings,
@@ -1208,18 +1239,18 @@ mod tests {
     fn updating_active_sub_updates_meta_and_activates() {
         let dir = temp_dir("apply-update");
         let mut settings = crate::backend::subscription::Settings::default();
-        apply_fetched_sub(&mut settings, &dir, None, Some("A"), Some("https://a"), &sample_text(1))
-            .unwrap();
-        let id = settings.active.clone().unwrap();
-        let (count, activate) = apply_fetched_sub(
+        apply_fetched_sub(
             &mut settings,
             &dir,
-            Some(&id),
             None,
-            None,
-            &sample_text(3),
+            Some("A"),
+            Some("https://a"),
+            &sample_text(1),
         )
         .unwrap();
+        let id = settings.active.clone().unwrap();
+        let (count, activate) =
+            apply_fetched_sub(&mut settings, &dir, Some(&id), None, None, &sample_text(3)).unwrap();
         assert_eq!(count, 3);
         assert!(activate, "更新活动订阅应触发提交");
         assert_eq!(settings.subscriptions[0].node_count, Some(3));
@@ -1230,10 +1261,24 @@ mod tests {
     fn updating_non_active_sub_does_not_activate() {
         let dir = temp_dir("apply-inactive");
         let mut settings = crate::backend::subscription::Settings::default();
-        apply_fetched_sub(&mut settings, &dir, None, Some("A"), Some("https://a"), &sample_text(1))
-            .unwrap();
-        apply_fetched_sub(&mut settings, &dir, None, Some("B"), Some("https://b"), &sample_text(1))
-            .unwrap();
+        apply_fetched_sub(
+            &mut settings,
+            &dir,
+            None,
+            Some("A"),
+            Some("https://a"),
+            &sample_text(1),
+        )
+        .unwrap();
+        apply_fetched_sub(
+            &mut settings,
+            &dir,
+            None,
+            Some("B"),
+            Some("https://b"),
+            &sample_text(1),
+        )
+        .unwrap();
         let second = settings.subscriptions[1].id.clone();
         settings.active = Some(second.clone());
         let first = settings.subscriptions[0].id.clone();
@@ -1259,7 +1304,17 @@ mod tests {
     fn apply_fetched_sub_rejects_unknown_id_and_missing_name() {
         let dir = temp_dir("apply-bad");
         let mut settings = crate::backend::subscription::Settings::default();
-        assert!(apply_fetched_sub(&mut settings, &dir, Some("ghost"), None, None, &sample_text(1)).is_err());
+        assert!(
+            apply_fetched_sub(
+                &mut settings,
+                &dir,
+                Some("ghost"),
+                None,
+                None,
+                &sample_text(1)
+            )
+            .is_err()
+        );
         assert!(
             apply_fetched_sub(&mut settings, &dir, None, None, None, &sample_text(1)).is_err(),
             "新增订阅缺 name/url 应报错"

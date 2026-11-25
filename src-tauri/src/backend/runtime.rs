@@ -35,7 +35,9 @@ impl RuntimeCfg {
     }
 
     pub fn client(&self) -> crate::backend::mihomo_api::MihomoClient {
-        crate::backend::mihomo_api::MihomoClient::new(self.socket_path().to_string_lossy().to_string())
+        crate::backend::mihomo_api::MihomoClient::new(
+            self.socket_path().to_string_lossy().to_string(),
+        )
     }
 
     /// 没有 systemd 用户实例时，提示用户在终端执行的启动命令。
@@ -675,7 +677,8 @@ mod direct_process_tests {
 
     #[test]
     fn parse_proc_stat_handles_spaces_and_parens_in_comm() {
-        let line = "4242 (my (weird) proc) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 23 24";
+        let line =
+            "4242 (my (weird) proc) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 23 24";
         assert_eq!(parse_proc_stat(line), Some(('S', 987654)));
         let zombie = "4242 (mihomo) Z 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 111 23";
         assert_eq!(parse_proc_stat(zombie), Some(('Z', 111)));
@@ -736,7 +739,10 @@ mod direct_process_tests {
         assert_ne!(rec.pid, std::process::id());
         // 校验子进程已脱离当前会话（setsid）
         let child_sid = unsafe { libc::getsid(rec.pid as libc::pid_t) };
-        assert_eq!(child_sid, rec.pid as libc::pid_t, "子进程应成为新会话首进程");
+        assert_eq!(
+            child_sid, rec.pid as libc::pid_t,
+            "子进程应成为新会话首进程"
+        );
 
         direct_stop(&cfg).unwrap();
         assert!(!direct_active(&cfg), "停止后进程应退出");
