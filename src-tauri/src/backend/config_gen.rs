@@ -138,49 +138,101 @@ pub fn generate(profile: &Value, socket_path: &str, tun_enabled: bool) -> Result
         }
     }
 
-    // ---- Gemini 检测入口：每个节点一个本地 listener，直连节点、绕开规则与用户选择 ----
-    // shortcut: listener 数量随节点数增长（端口 17890+N），节点上千时可改成单 listener + 切组
+    merge_gemini_listeners(&mut cfg);
+
+    let out = serde_yaml::to_string(&cfg)?;
+    Ok(out)
+}
+
+fn is_gemini_listener(entry: &Value) -> bool {
+    entry
+        .get("name")
+        .and_then(Value::as_str)
+        .is_some_and(|name| name.starts_with(LISTENER_PREFIX))
+}
+
+fn collect_used_ports(cfg: &Value, listeners: &[Value]) -> std::collections::HashSet<u16> {
+    let mut used = std::collections::HashSet::new();
+    for key in [
+        "port",
+        "socks-port",
+        "redir-port",
+        "tproxy-port",
+        "mixed-port",
+    ] {
+        if let Some(p) = cfg
+            .get(key)
+            .and_then(Value::as_u64)
+            .and_then(|v| u16::try_from(v).ok())
+        {
+            used.insert(p);
+        }
+    }
+    for listener in listeners {
+        if let Some(p) = listener
+            .get("port")
+            .and_then(Value::as_u64)
+            .and_then(|v| u16::try_from(v).ok())
+        {
+            used.insert(p);
+        }
+    }
+    used
+}
+
+fn build_gemini_listener(index: usize, port: u16, proxy_name: &str) -> Value {
+    let mut listener = serde_yaml::Mapping::new();
+    listener.insert(
+        Value::String("name".into()),
+        Value::String(format!("{LISTENER_PREFIX}{index}")),
+    );
+    listener.insert(Value::String("type".into()), Value::String("http".into()));
+    listener.insert(
+        Value::String("listen".into()),
+        Value::String("127.0.0.1".into()),
+    );
+    listener.insert(Value::String("port".into()), Value::Number(port.into()));
+    listener.insert(
+        Value::String("proxy".into()),
+        Value::String(proxy_name.to_string()),
+    );
+    Value::Mapping(listener)
+}
+
+/// 为每个节点生成本地 Gemini 探测 listener，直连节点、绕开规则与用户选择。
+/// 幂等：先清除旧的 `tailash-gemini-*` 项，再避开配置中已占用的端口顺序分配。
+fn merge_gemini_listeners(cfg: &mut Value) {
     let mut listeners = cfg
         .get("listeners")
         .and_then(Value::as_sequence)
         .cloned()
         .unwrap_or_default();
-    for (index, proxy) in cfg
+    listeners.retain(|entry| !is_gemini_listener(entry));
+
+    let mut used_ports = collect_used_ports(cfg, &listeners);
+    let mut next_port: u32 = LISTENER_BASE_PORT as u32;
+    let proxy_names: Vec<String> = cfg
         .get("proxies")
         .and_then(Value::as_sequence)
         .into_iter()
         .flatten()
-        .enumerate()
-    {
-        let Some(name) = proxy.get("name").and_then(Value::as_str) else {
-            continue;
+        .filter_map(|p| p.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect();
+
+    for (index, name) in proxy_names.iter().enumerate() {
+        while next_port <= u16::MAX as u32 && used_ports.contains(&(next_port as u16)) {
+            next_port += 1;
+        }
+        let Ok(port) = u16::try_from(next_port) else {
+            break;
         };
-        let mut listener = serde_yaml::Mapping::new();
-        listener.insert(
-            Value::String("name".into()),
-            Value::String(format!("{LISTENER_PREFIX}{index}")),
-        );
-        listener.insert(Value::String("type".into()), Value::String("http".into()));
-        listener.insert(
-            Value::String("listen".into()),
-            Value::String("127.0.0.1".into()),
-        );
-        listener.insert(
-            Value::String("port".into()),
-            Value::Number((LISTENER_BASE_PORT as u64 + index as u64).into()),
-        );
-        listener.insert(
-            Value::String("proxy".into()),
-            Value::String(name.to_string()),
-        );
-        listeners.push(Value::Mapping(listener));
+        used_ports.insert(port);
+        next_port += 1;
+        listeners.push(build_gemini_listener(index, port, name));
     }
     if !listeners.is_empty() {
         cfg["listeners"] = Value::Sequence(listeners);
     }
-
-    let out = serde_yaml::to_string(&cfg)?;
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -221,6 +273,37 @@ mod tests {
             p["proxies"][0]["name"].clone(),
             "入口必须直连对应节点"
         );
+    }
+
+    #[test]
+    fn gemini_listeners_generation_is_idempotent() {
+        let p = load_profile();
+        let n_proxies = p["proxies"].as_sequence().unwrap().len();
+        let first = generate(&p, "/tmp/tailash-mihomo.sock", true).unwrap();
+        let first_val: Value = serde_yaml::from_str(&first).unwrap();
+        let second = generate(&first_val, "/tmp/tailash-mihomo.sock", true).unwrap();
+        let second_val: Value = serde_yaml::from_str(&second).unwrap();
+        let listeners = second_val["listeners"].as_sequence().unwrap();
+        assert_eq!(
+            listeners.len(),
+            n_proxies,
+            "重复生成不能叠加旧的 gemini listeners"
+        );
+    }
+
+    #[test]
+    fn gemini_listeners_skip_ports_already_used_in_profile() {
+        let profile: Value = serde_yaml::from_str(
+            "mixed-port: 17890\nlisteners:\n  - name: user-http\n    type: http\n    port: 17891\nproxies:\n  - name: JP-1\n    type: vmess\nrules: []\n",
+        )
+        .unwrap();
+        let out = generate(&profile, "/tmp/tailash-mihomo.sock", true).unwrap();
+        let cfg: Value = serde_yaml::from_str(&out).unwrap();
+        let listeners = cfg["listeners"].as_sequence().unwrap();
+        assert_eq!(listeners.len(), 2);
+        assert_eq!(listeners[0]["name"], "user-http");
+        assert_eq!(listeners[1]["proxy"], "JP-1");
+        assert_eq!(listeners[1]["port"], 17892);
     }
 
     #[test]

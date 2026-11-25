@@ -9,18 +9,23 @@ const UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, lik
 /// 支持地区的页面里带这两个标记之一（社区脚本 RegionRestrictionCheck 的判据）
 const AVAILABLE_MARKERS: [&str; 2] = ["45631641,null,true", "45617354,null,true"];
 /// Gemini 不开放的国家/地区（ISO3）。开放的有 200 多个，短黑名单比长白名单更不容易过期。
-const BLOCKED_REGIONS: [&str; 6] = ["CHN", "RUS", "IRN", "PRK", "SYR", "CUB"];
+const BLOCKED_REGIONS: [&str; 9] = [
+    "CHN", "HKG", "MAC", "RUS", "BLR", "IRN", "PRK", "SYR", "CUB",
+];
 
-/// 每个节点一个本地入口，端口 = BASE + 节点在 proxies 里的下标（见 config_gen）
+/// 每个节点一个本地入口，端口从 BASE 起顺序分配（避开已占用端口，见 config_gen）
 pub const LISTENER_PREFIX: &str = "tailash-gemini-";
 pub const LISTENER_BASE_PORT: u16 = 17890;
 
-/// 从页面里取出口地区码（`,2,1,200,"SGP"`）。
+/// 从页面里取出口地区码（`,2,1,200,"SGP"`），要求 3 位大写字母且紧跟闭合引号。
 fn region(body: &str) -> Option<&str> {
     const NEEDLE: &str = ",2,1,200,\"";
-    let start = body.find(NEEDLE)? + NEEDLE.len();
-    body.get(start..start + 3)
-        .filter(|code| code.chars().all(|c| c.is_ascii_uppercase()))
+    body.match_indices(NEEDLE).find_map(|(idx, _)| {
+        let rest = body.get(idx + NEEDLE.len()..)?;
+        let code = rest.get(..3)?;
+        (rest.as_bytes().get(3) == Some(&b'"') && code.bytes().all(|b| b.is_ascii_uppercase()))
+            .then_some(code)
+    })
 }
 
 pub fn available(status: u16, body: &str) -> bool {
@@ -29,30 +34,30 @@ pub fn available(status: u16, body: &str) -> bool {
             || region(body).is_some_and(|code| !BLOCKED_REGIONS.contains(&code)))
 }
 
-/// 从生成好的 config.yaml 读出（节点名, 本地入口端口）。
-pub fn listeners(config_path: &Path) -> Vec<(String, u16)> {
-    let Ok(text) = std::fs::read_to_string(config_path) else {
-        return Vec::new();
-    };
-    let Ok(cfg) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
-        return Vec::new();
-    };
+fn parse_listener_entry(listener: &serde_yaml::Value) -> Option<(String, u16)> {
+    let name = listener.get("name")?.as_str()?;
+    if !name.starts_with(LISTENER_PREFIX) {
+        return None;
+    }
+    let proxy = listener.get("proxy")?.as_str()?;
+    let port = u16::try_from(listener.get("port")?.as_u64()?).ok()?;
+    Some((proxy.to_string(), port))
+}
+
+/// 从已解析的配置提取（节点名, 本地入口端口）。
+pub fn parse_listeners(cfg: &serde_yaml::Value) -> Vec<(String, u16)> {
     cfg.get("listeners")
         .and_then(serde_yaml::Value::as_sequence)
-        .map(|listeners| {
-            listeners
-                .iter()
-                .filter_map(|listener| {
-                    let name = listener.get("name")?.as_str()?;
-                    if !name.starts_with(LISTENER_PREFIX) {
-                        return None;
-                    }
-                    let proxy = listener.get("proxy")?.as_str()?;
-                    let port = listener.get("port")?.as_u64()?;
-                    Some((proxy.to_string(), u16::try_from(port).ok()?))
-                })
-                .collect()
-        })
+        .map(|seq| seq.iter().filter_map(parse_listener_entry).collect())
+        .unwrap_or_default()
+}
+
+/// 从生成好的 config.yaml 读出（节点名, 本地入口端口）。
+pub fn listeners(config_path: &Path) -> Vec<(String, u16)> {
+    std::fs::read_to_string(config_path)
+        .ok()
+        .and_then(|text| serde_yaml::from_str::<serde_yaml::Value>(&text).ok())
+        .map(|cfg| parse_listeners(&cfg))
         .unwrap_or_default()
 }
 
@@ -60,6 +65,11 @@ pub fn listeners(config_path: &Path) -> Vec<(String, u16)> {
 pub fn listening(port: u16) -> bool {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
+}
+
+/// 所有预期入口端口是否都已在监听。
+pub fn all_listening(ports: &[(String, u16)]) -> bool {
+    !ports.is_empty() && ports.iter().all(|(_, port)| listening(*port))
 }
 
 /// 让内核按当前 config.yaml 重载（listeners 这时才会绑定），最多等 2 秒确认入口在听。
@@ -83,6 +93,16 @@ pub fn restart_listeners(
     })
 }
 
+/// 解析 `curl -w "\n%{http_code}"` 的标准输出并判定可用性。
+fn available_from_curl_output(stdout: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(stdout);
+    let (body, status) = text.rsplit_once('\n').unwrap_or((&text, ""));
+    status
+        .trim()
+        .parse::<u16>()
+        .is_ok_and(|code| available(code, body))
+}
+
 /// 经某个节点的本地入口探测；任何失败都当作不可用。
 pub fn probe(port: u16) -> bool {
     let out = std::process::Command::new("curl")
@@ -90,6 +110,8 @@ pub fn probe(port: u16) -> bool {
             "-sS",
             "-L",
             "--compressed",
+            "--noproxy",
+            "",
             "--max-time",
             "15",
             "--connect-timeout",
@@ -104,18 +126,10 @@ pub fn probe(port: u16) -> bool {
         .arg(format!("--proxy=http://127.0.0.1:{port}"))
         .arg(GEMINI_URL)
         .output();
-    let Ok(out) = out else {
-        return false;
-    };
-    if !out.status.success() {
-        return false;
+    match out {
+        Ok(out) if out.status.success() => available_from_curl_output(&out.stdout),
+        _ => false,
     }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let (body, status) = stdout.rsplit_once('\n').unwrap_or((&stdout, ""));
-    status
-        .trim()
-        .parse::<u16>()
-        .is_ok_and(|code| available(code, body))
 }
 
 #[cfg(test)]
@@ -134,8 +148,16 @@ mod tests {
         assert!(available(200, &page("SGP")));
         assert!(available(200, &page("TWN")));
         assert!(!available(200, &page("CHN")));
+        assert!(!available(200, &page("HKG")));
+        assert!(!available(200, &page("MAC")));
+        assert!(!available(200, &page("BLR")));
         assert!(!available(200, &page("RUS")));
         assert!(!available(403, &page("SGP")));
+        assert!(!available(200, r#"<html>,2,1,200,"SGPX"</html>"#));
+        assert!(available(
+            200,
+            r#"<html>,2,1,200,"NOPE",2,1,200,"SGP"</html>"#
+        ));
         assert!(!available(200, "<html>sorry</html>"));
     }
 
@@ -159,5 +181,19 @@ mod tests {
         .unwrap();
         assert_eq!(listeners(&path), vec![("日本".to_string(), 17890)]);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn curl_output_parser_splits_trailing_status_code() {
+        assert!(available_from_curl_output(
+            b"<html>,2,1,200,\"USA\"</html>\n200"
+        ));
+        assert!(!available_from_curl_output(
+            b"<html>,2,1,200,\"HKG\"</html>\n200"
+        ));
+        assert!(!available_from_curl_output(
+            b"<html>,2,1,200,\"USA\"</html>\n403"
+        ));
+        assert!(!available_from_curl_output(b"malformed without status"));
     }
 }
