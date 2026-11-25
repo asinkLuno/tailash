@@ -1060,6 +1060,39 @@ fn reload_core(
     Ok(view)
 }
 
+fn remove_if_exists(path: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn backup_profile(profile: &std::path::Path, backup: &std::path::Path) -> anyhow::Result<bool> {
+    use anyhow::Context as _;
+    // 清理上次异常中断残留的备份，保证热重载幂等（单实例锁 + 单 worker 保证无并发重载）
+    remove_if_exists(backup).context("清理残留订阅备份失败")?;
+    match std::fs::hard_link(profile, backup) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e).context("备份当前订阅失败"),
+    }
+}
+
+fn rollback_profile(
+    installed: bool,
+    saved: bool,
+    backup: &std::path::Path,
+    profile: &std::path::Path,
+) -> std::io::Result<()> {
+    match (installed, saved) {
+        (true, true) => std::fs::rename(backup, profile),
+        (true, false) => remove_if_exists(profile),
+        (false, true) => remove_if_exists(backup),
+        (false, false) => Ok(()),
+    }
+}
+
 fn commit_reload(
     staged_profile: &std::path::Path,
     profile: &std::path::Path,
@@ -1069,26 +1102,19 @@ fn commit_reload(
 ) -> anyhow::Result<()> {
     use anyhow::Context as _;
     anyhow::ensure!(config.is_file(), "缺少当前配置，不能安全热重载");
+    // 先让内核加载候选配置：内核拒绝时完全不动磁盘上的 profile/config，也不会留下 rollback 备份
+    reload(staged_config)?;
+
     let backup = profile.with_extension("yaml.rollback");
-    // Keep the original inode until both renames succeed. Never overwrite a recovery copy.
-    let saved = match std::fs::hard_link(profile, &backup) {
-        Ok(()) => true,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(e) => return Err(e).context("备份当前订阅失败"),
-    };
+    let saved = backup_profile(profile, &backup)?;
     let mut installed = false;
     let result = (|| -> anyhow::Result<()> {
         crate::backend::subscription::atomic_replace(staged_profile, profile)?;
         installed = true;
-        reload(staged_config)?;
         crate::backend::subscription::atomic_replace(staged_config, config)
     })();
-    if installed && let Err(error) = result {
-        let disk = if saved {
-            std::fs::rename(&backup, profile)
-        } else {
-            std::fs::remove_file(profile)
-        };
+    if let Err(error) = result {
+        let disk = rollback_profile(installed, saved, &backup, profile);
         let core = reload(config);
         if disk.is_err() || core.is_err() {
             anyhow::bail!("更新失败: {error:#}；恢复订阅: {disk:?}；恢复内核: {core:?}");
@@ -1096,9 +1122,9 @@ fn commit_reload(
         return Err(error);
     }
     if saved {
-        std::fs::remove_file(backup).context("清理订阅备份失败")?;
+        std::fs::remove_file(&backup).context("清理订阅备份失败")?;
     }
-    result
+    Ok(())
 }
 const NOT_RUNNING: &str = "内核未运行";
 
@@ -1292,6 +1318,56 @@ mod tests {
         assert_eq!(loaded.into_inner(), ["new config", "old config"]);
         assert_eq!(fs::read_to_string(profile).unwrap(), "old profile");
         assert_eq!(fs::read_to_string(config).unwrap(), "old config");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn commit_reload_recovers_from_stale_rollback_file() {
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("tailash-stale-rb-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let profile = dir.join("profile.yaml");
+        let backup = profile.with_extension("yaml.rollback");
+        let config = dir.join("config.yaml");
+        let pending = dir.join("profile.pending");
+        let candidate = dir.join("config.pending");
+        fs::write(&profile, "old profile").unwrap();
+        fs::write(&backup, "stale backup from prior crash").unwrap();
+        fs::write(&pending, "new profile").unwrap();
+        fs::write(&config, "old config").unwrap();
+        fs::write(&candidate, "new config").unwrap();
+
+        commit_reload(&pending, &profile, &candidate, &config, |_| Ok(())).unwrap();
+
+        assert_eq!(fs::read_to_string(&profile).unwrap(), "new profile");
+        assert_eq!(fs::read_to_string(&config).unwrap(), "new config");
+        assert!(!backup.exists(), "成功后不应残留 rollback 备份");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn commit_reload_failure_in_core_leaves_profile_and_backup_untouched() {
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("tailash-core-fail-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let profile = dir.join("profile.yaml");
+        let backup = profile.with_extension("yaml.rollback");
+        let config = dir.join("config.yaml");
+        let pending = dir.join("profile.pending");
+        let candidate = dir.join("config.pending");
+        fs::write(&profile, "old profile").unwrap();
+        fs::write(&pending, "new profile").unwrap();
+        fs::write(&config, "old config").unwrap();
+        fs::write(&candidate, "bad config").unwrap();
+
+        let err = commit_reload(&pending, &profile, &candidate, &config, |_| {
+            anyhow::bail!("mihomo rejected config")
+        })
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("mihomo rejected config"));
+        assert_eq!(fs::read_to_string(&profile).unwrap(), "old profile");
+        assert_eq!(fs::read_to_string(&config).unwrap(), "old config");
+        assert!(!backup.exists(), "内核拒绝配置时不该产生 rollback 文件");
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
