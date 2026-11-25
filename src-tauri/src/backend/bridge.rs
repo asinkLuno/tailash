@@ -945,7 +945,8 @@ impl CoreLink {
                     }
                     snap.view = view;
                     snap.failed_delays.clear();
-                    snap.message = "已连接内核".into();
+                    // 连接成功不再占着底部消息条（顶栏徽标已表达状态），只留错误/进度提示
+                    snap.message.clear();
                 });
                 self.connected = Some(true);
                 self.start_traffic(snapshot);
