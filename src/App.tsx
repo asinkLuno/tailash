@@ -1,8 +1,9 @@
-//! tailash 主界面：顶栏（品牌 + 三 tab 导航 + 状态徽标）+ 内容区 + 底部消息条。
+//! tailash 主界面：顶栏（品牌 + 三 tab 导航 + 状态徽标 + 主题选择）+ 内容区 + 底部消息条。
 //! 状态唯一来源是 useSnapshot（后端 500ms 增量推送），命令一律经 sendCmd 异步下发。
 import { useState } from "react";
 import { useSnapshot, useTraffic } from "./api";
 import { formatSpeed } from "./traffic";
+import { applyMode, readStoredMode, storeMode, type ThemeMode } from "./theme";
 import CoreTab from "./tabs/CoreTab";
 import SubsTab from "./tabs/SubsTab";
 import NodesTab from "./tabs/NodesTab";
@@ -18,6 +19,36 @@ function NavbarTraffic() {
       <span className="text-base-content/30">/</span>
       <span className="text-success">↑ {formatSpeed(traffic.up)}</span>
     </div>
+  );
+}
+
+const THEME_MODES: { id: ThemeMode; label: string }[] = [
+  { id: "system", label: "跟随系统" },
+  { id: "light", label: "浅色" },
+  { id: "dark", label: "深色" },
+];
+
+function ThemeSelect() {
+  const [mode, setMode] = useState<ThemeMode>(readStoredMode);
+  return (
+    <select
+      className="select select-sm w-auto"
+      aria-label="主题"
+      title="主题：跟随系统 / 浅色 / 深色"
+      value={mode}
+      onChange={(e) => {
+        const next = e.target.value as ThemeMode;
+        storeMode(next);
+        applyMode(next);
+        setMode(next);
+      }}
+    >
+      {THEME_MODES.map((t) => (
+        <option key={t.id} value={t.id}>
+          {t.label}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -71,6 +102,7 @@ export default function App() {
           >
             TUN {snap.tunEnabled ? "开" : "关"}
           </span>
+          <ThemeSelect />
         </div>
       </div>
 

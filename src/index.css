@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @plugin "daisyui" {
-  themes: light --default;
+  themes: light --default, dark --prefersdark;
 }
 
 /* 覆盖 daisyUI light 主题的品牌色：默认 primary 是高饱和紫（oklch 45% 0.24 277），
@@ -11,6 +11,16 @@
   color-scheme: light;
   --color-primary: oklch(52% 0.15 254);
   --color-primary-content: oklch(97% 0.015 254);
+}
+
+/* 深色主题沿用 dark 默认色阶，只把 primary 提亮到深底上仍够对比的同色相蓝。
+   prefersdark：<html> 不设 data-theme 时按系统偏好自动选 dark（跟随系统即靠这条）。 */
+@plugin "daisyui/theme" {
+  name: "dark";
+  prefersdark: true;
+  color-scheme: dark;
+  --color-primary: oklch(72% 0.13 254);
+  --color-primary-content: oklch(22% 0.04 254);
 }
 
 /* 长节点列表跳过视口外行的布局与绘制，降低大量节点下的主线程开销 */
