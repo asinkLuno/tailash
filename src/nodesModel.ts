@@ -5,6 +5,11 @@ import { classifyDelay, delaySortKey } from "./delay.ts";
 
 export type SortMode = "subscription" | "delay" | "name";
 
+/** 把持久化/深链来的字符串解析成排序模式；非法值一律回退订阅顺序。 */
+export function parseSortMode(value: string | null | undefined): SortMode {
+  return value === "delay" || value === "name" ? value : "subscription";
+}
+
 export interface ResolvedChain {
   chain: string[];
   node: NodeInfo | null;

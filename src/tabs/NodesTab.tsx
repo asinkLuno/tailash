@@ -5,7 +5,7 @@ import { sendCmd } from "../api";
 import type { Snapshot } from "../api";
 import GroupCard from "../components/GroupCard";
 import NodeRow from "../components/NodeRow";
-import { buildNodesIndex, sortNodes, type SortMode } from "../nodesModel";
+import { buildNodesIndex, parseSortMode, sortNodes, type SortMode } from "../nodesModel";
 
 const SORTS: { value: SortMode; label: string }[] = [
   { value: "subscription", label: "订阅顺序" },
@@ -21,12 +21,19 @@ function handleTest(name: string) {
   void sendCmd({ type: "testNode", name });
 }
 
+/** 记住上次排序选择（深链 #nodes?sort=… 优先于它）。 */
+const SORT_STORAGE_KEY = "tailash.nodes.sort";
+
 function NodesTab({ snap }: { snap: Snapshot }) {
-  // 支持深链指定排序：#nodes?sort=delay（默认订阅顺序）
   const [sort, setSort] = useState<SortMode>(() => {
     const match = /sort=(subscription|delay|name)/.exec(window.location.hash);
-    return (match?.[1] as SortMode) ?? "subscription";
+    if (match) return match[1] as SortMode;
+    return parseSortMode(localStorage.getItem(SORT_STORAGE_KEY));
   });
+  function changeSort(next: SortMode) {
+    setSort(next);
+    localStorage.setItem(SORT_STORAGE_KEY, next);
+  }
   // 有策略组时默认折叠「全部节点」，避免上千个重复 DOM 行拖慢主线程；无策略组时自动展开
   const [allOpenOverride, setAllOpenOverride] = useState<boolean | null>(null);
   const allOpen = allOpenOverride ?? snap.view.groups.length === 0;
@@ -54,7 +61,7 @@ function NodesTab({ snap }: { snap: Snapshot }) {
         <select
           className="select select-sm w-32"
           value={sort}
-          onChange={(e) => setSort(e.target.value as SortMode)}
+          onChange={(e) => changeSort(e.target.value as SortMode)}
           title="节点排序（组顺序始终按订阅）"
         >
           {SORTS.map((s) => (

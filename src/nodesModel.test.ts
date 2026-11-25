@@ -4,6 +4,7 @@ import type { GroupInfo, NodeInfo, ProxyView } from "./api.ts";
 import {
   buildNodesIndex,
   effectiveNow,
+  parseSortMode,
   resolveChain,
   sortNodes,
 } from "./nodesModel.ts";
@@ -32,6 +33,16 @@ describe("sortNodes", () => {
       .sort((a, b) => a.name.localeCompare(b.name, "zh"))
       .map((n) => n.name);
     assert.deepEqual(sorted, expected);
+  });
+});
+
+describe("parseSortMode", () => {
+  it("accepts known modes and falls back to subscription", () => {
+    assert.equal(parseSortMode("delay"), "delay");
+    assert.equal(parseSortMode("name"), "name");
+    assert.equal(parseSortMode("subscription"), "subscription");
+    assert.equal(parseSortMode(null), "subscription");
+    assert.equal(parseSortMode("bogus"), "subscription");
   });
 });
 
