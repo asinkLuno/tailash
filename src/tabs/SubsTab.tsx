@@ -73,6 +73,29 @@ export default function SubsTab({ snap }: { snap: Snapshot }) {
           <p className="text-xs text-base-content/50">
             添加时会先下载校验；第一条订阅自动启用。切换订阅立即生效（内核运行中则热重载）。
           </p>
+          <div className="flex flex-wrap items-center gap-2 border-t border-base-300 pt-3">
+            <span className="text-sm">自动更新</span>
+            <select
+              className="select select-sm w-36"
+              aria-label="自动更新间隔"
+              value={snap.autoUpdateHours ?? 0}
+              onChange={(e) =>
+                sendCmd({
+                  type: "setAutoUpdate",
+                  hours: Number(e.target.value) || null,
+                })
+              }
+            >
+              <option value={0}>关闭</option>
+              <option value={6}>每 6 小时</option>
+              <option value={12}>每 12 小时</option>
+              <option value={24}>每 24 小时</option>
+              <option value={72}>每 3 天</option>
+            </select>
+            <span className="text-xs text-base-content/50">
+              应用运行期间到期后逐个刷新全部订阅；使用中的订阅热重载，其余留待切换时生效。
+            </span>
+          </div>
         </div>
       </form>
 

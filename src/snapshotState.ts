@@ -153,6 +153,7 @@ export function reconcileSnapshot(prev: Snapshot, next: Snapshot): Snapshot {
     prev.mode === next.mode &&
     prev.tunEnabled === next.tunEnabled &&
     prev.testAllRunning === next.testAllRunning &&
+    prev.autoUpdateHours === next.autoUpdateHours &&
     prev.message === next.message;
 
   if (
@@ -177,6 +178,7 @@ export function reconcileSnapshot(prev: Snapshot, next: Snapshot): Snapshot {
     trafficHistory,
     view,
     subs,
+    autoUpdateHours: next.autoUpdateHours,
     testing,
     testAllRunning: next.testAllRunning,
     message: next.message,
@@ -199,6 +201,7 @@ export function hasAppStateChanged(prev: Snapshot, next: Snapshot): boolean {
     prev.tunEnabled !== next.tunEnabled ||
     prev.view !== next.view ||
     prev.subs !== next.subs ||
+    prev.autoUpdateHours !== next.autoUpdateHours ||
     prev.testing !== next.testing ||
     prev.testAllRunning !== next.testAllRunning ||
     prev.message !== next.message ||

@@ -69,6 +69,8 @@ export interface Snapshot {
   trafficHistory: TrafficPoint[];
   view: ProxyView;
   subs: SubStatus[];
+  /** 自动更新间隔（小时）；null = 关闭 */
+  autoUpdateHours: number | null;
   /** 单点测速进行中的节点名 */
   testing: string[];
   /** 「测全部」进行中 */
@@ -88,7 +90,8 @@ export type Cmd =
   | { type: "updateSub"; id: string }
   | { type: "addSub"; name: string; url: string }
   | { type: "removeSub"; id: string }
-  | { type: "switchSub"; id: string };
+  | { type: "switchSub"; id: string }
+  | { type: "setAutoUpdate"; hours: number | null };
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -102,6 +105,7 @@ const emptySnapshot: Snapshot = {
   trafficHistory: [],
   view: { nodes: [], groups: [] },
   subs: [],
+  autoUpdateHours: null,
   testing: [],
   testAllRunning: false,
   message: "正在连接…",

@@ -81,6 +81,7 @@ export function mockDefaultSnapshot(): Snapshot {
       },
     ],
     testing: [],
+    autoUpdateHours: 24,
     testAllRunning: false,
     message: "已连接内核（mock 模式，命令只作用于演示数据）",
     failedDelays: ["新加坡SG-A", "美国USLA-A"],
@@ -229,6 +230,10 @@ export function mockSendCmd(cmd: Cmd): Promise<void> {
     case "switchSub":
       state.subs = state.subs.map((s) => ({ ...s, active: s.id === cmd.id }));
       state.message = "已切换订阅";
+      break;
+    case "setAutoUpdate":
+      state.autoUpdateHours = cmd.hours;
+      state.message = cmd.hours ? `自动更新订阅：每 ${cmd.hours} 小时` : "已关闭自动更新";
       break;
   }
   emit();

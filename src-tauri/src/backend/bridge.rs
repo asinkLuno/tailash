@@ -30,6 +30,8 @@ pub enum UiCmd {
     RemoveSub { id: String },
     /// 切换活动订阅（内核在跑则热重载，否则物化 profile 供下次启动）
     SwitchSub { id: String },
+    /// 设置自动更新间隔（小时；None 或 0 = 关闭）
+    SetAutoUpdate { hours: Option<u64> },
     /// 下载线程 → worker：订阅内容已下载并校验，由 worker 统一落盘/改 settings。
     /// id 为 None 表示新增订阅（此时 name/url 必有）；Ok 携带 profile 文本。
     SubFetched {
@@ -82,6 +84,8 @@ pub struct Snapshot {
     pub view: crate::backend::proxy_view::ProxyView,
     /// 全部订阅（settings.json 的前端视图）
     pub subs: Vec<SubStatus>,
+    /// 自动更新间隔（小时）；None = 关闭
+    pub auto_update_hours: Option<u64>,
     /// 单点测速进行中的节点名
     pub testing: Vec<String>,
     /// 「测全部」进行中（UI 据此灰掉测速按钮）
@@ -140,7 +144,10 @@ pub fn spawn_worker(
             {
                 let _ = std::fs::write(&cfg.profile_path, &text);
             }
-            set_snap(&snapshot, |snap| snap.subs = sub_status_list(&settings));
+            set_snap(&snapshot, |snap| {
+                snap.subs = sub_status_list(&settings);
+                snap.auto_update_hours = settings.auto_update_hours;
+            });
             link.poll(&cfg, &snapshot, &mut delay_cancel);
         // 按当前订阅刷新 config.yaml，让接下来启动的内核用上最新订阅。
         if cfg.profile_path.is_file()
@@ -150,11 +157,43 @@ pub fn spawn_worker(
                 snap.message = format!("生成内核配置失败: {e:#}")
             });
         }
+        // 自动更新队列：到期时按订阅顺序一次性灌入，逐个下载
+        let mut auto_queue: VecDeque<String> = VecDeque::new();
         loop {
             let cmd = match rx.recv_timeout(std::time::Duration::from_secs(1)) {
                 Ok(cmd) => cmd,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     link.poll(&cfg, &snapshot, &mut delay_cancel);
+                    // 自动更新：到期时把全部订阅排进队列，一次只跑一个下载（互斥见 updating_sub）
+                    if auto_queue.is_empty()
+                        && crate::backend::subscription::auto_update_due(
+                            settings.auto_update_hours,
+                            settings.auto_updated_at,
+                            now_secs(),
+                        )
+                    {
+                        auto_queue.extend(settings.subscriptions.iter().map(|s| s.id.clone()));
+                        settings.auto_updated_at = Some(now_secs());
+                        if let Err(e) =
+                            crate::backend::subscription::save_settings(&cfg.workdir, &settings)
+                        {
+                            eprintln!("保存自动更新进度失败: {e}");
+                        }
+                        if !auto_queue.is_empty() {
+                            set_snap(&snapshot, |snap| snap.message = "正在自动更新订阅…".into());
+                        }
+                    }
+                    if !updating_sub.load(Ordering::Acquire)
+                        && let Some(id) = auto_queue.pop_front()
+                        && let Some(url) = settings
+                            .subscriptions
+                            .iter()
+                            .find(|s| s.id == id)
+                            .map(|s| s.url.clone())
+                    {
+                        updating_sub.store(true, Ordering::Release);
+                        launch_sub_fetch(tx.clone(), Some(id), None, url);
+                    }
                     continue;
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -425,6 +464,26 @@ pub fn spawn_worker(
                             snap.message = format!("切换失败: {e:#}");
                         }),
                     }
+                }
+                UiCmd::SetAutoUpdate { hours } => {
+                    let hours = hours.filter(|h| *h > 0);
+                    settings.auto_update_hours = hours;
+                    // 关闭时清空还没跑的队列，别让后台继续下载
+                    if hours.is_none() {
+                        auto_queue.clear();
+                    }
+                    if let Err(e) =
+                        crate::backend::subscription::save_settings(&cfg.workdir, &settings)
+                    {
+                        eprintln!("保存自动更新设置失败: {e}");
+                    }
+                    set_snap(&snapshot, |snap| {
+                        snap.auto_update_hours = hours;
+                        snap.message = match hours {
+                            None => "已关闭自动更新".into(),
+                            Some(h) => format!("自动更新订阅：每 {h} 小时"),
+                        };
+                    });
                 }
                 UiCmd::TestAll => {
                     if let Some(c) = &core {
@@ -702,6 +761,13 @@ fn count_proxies(text: &str) -> anyhow::Result<usize> {
         .unwrap_or(0))
 }
 
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// SubFetched(Ok) 的落盘与登记：写 subs/<id>.yaml、更新元数据、保存 settings。
 /// 返回 (节点数, 是否需要把该内容提交为活动 profile)：
 /// 新增时还没有活动订阅 → 是；更新当前活动订阅 → 是；其余否。
@@ -714,10 +780,7 @@ fn apply_fetched_sub(
     text: &str,
 ) -> anyhow::Result<(usize, bool)> {
     let count = count_proxies(text)?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let now = now_secs();
     let sub_id = match (id, name, url) {
         (None, Some(name), Some(url)) => {
             let id = crate::backend::subscription::new_sub_id();
@@ -1224,6 +1287,8 @@ mod tests {
                 },
             ],
             active: Some("s2".into()),
+            auto_update_hours: None,
+            auto_updated_at: None,
             subscribe_url: String::new(),
         };
         let subs = sub_status_list(&settings);

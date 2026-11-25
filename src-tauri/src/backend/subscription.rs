@@ -32,9 +32,23 @@ pub struct Settings {
     /// 当前生效的订阅 id；None = 尚未选过
     #[serde(default)]
     pub active: Option<String>,
+    /// 自动更新间隔（小时）；None = 关闭
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_update_hours: Option<u64>,
+    /// 上一轮自动更新开始时的 unix 秒；None = 从未自动更新过
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_updated_at: Option<u64>,
     /// 旧版单订阅地址：只为读兼容，迁移后清空且不再写出
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub subscribe_url: String,
+}
+
+/// 自动更新是否到期：关闭（None/0）永不到期；从未更新过视为立即到期。
+pub fn auto_update_due(hours: Option<u64>, last: Option<u64>, now: u64) -> bool {
+    let Some(hours) = hours.filter(|h| *h > 0) else {
+        return false;
+    };
+    last.is_none_or(|last| now.saturating_sub(last) >= hours.saturating_mul(3600))
 }
 
 pub fn settings_path(data_dir: &Path) -> PathBuf {
@@ -84,6 +98,8 @@ pub fn migrate_legacy(settings: Settings, data_dir: &Path) -> Settings {
             updated_at: None,
         }],
         active: Some(id),
+        auto_update_hours: None,
+        auto_updated_at: None,
         subscribe_url: String::new(),
     }
 }
@@ -351,12 +367,16 @@ mod tests {
                 updated_at: Some(1_700_000_000),
             }],
             active: Some("s1".into()),
+            auto_update_hours: Some(12),
+            auto_updated_at: Some(1_700_000_500),
             subscribe_url: String::new(),
         };
         save_settings(&dir, &s).unwrap();
         let got = load_settings(&dir);
         assert_eq!(got.subscriptions, s.subscriptions);
         assert_eq!(got.active, s.active);
+        assert_eq!(got.auto_update_hours, Some(12));
+        assert_eq!(got.auto_updated_at, Some(1_700_000_500));
         assert_eq!(got.subscribe_url, "", "迁移后的 legacy 字段不再写出");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -541,6 +561,20 @@ mod tests {
         assert!(fetch_subscribe("ftp://x").is_err());
         // 无网络时不设断言；只要 scheme 校验先于命令执行即可
         let _ = fetch_subscribe("https://127.0.0.1:1/sub");
+    }
+
+    #[test]
+    fn auto_update_due_only_when_enabled_and_interval_elapsed() {
+        // 关闭：无论多久都不到期
+        assert!(!auto_update_due(None, Some(0), 10_000_000));
+        assert!(!auto_update_due(Some(0), None, 10_000_000));
+        // 从未更新过：立即到期
+        assert!(auto_update_due(Some(6), None, 1));
+        // 未到间隔 / 刚好到间隔
+        assert!(!auto_update_due(Some(6), Some(1000), 1000 + 6 * 3600 - 1));
+        assert!(auto_update_due(Some(6), Some(1000), 1000 + 6 * 3600));
+        // 时钟回拨（last > now）不刷屏：按未到期处理
+        assert!(!auto_update_due(Some(6), Some(9999), 1000));
     }
 
     #[test]

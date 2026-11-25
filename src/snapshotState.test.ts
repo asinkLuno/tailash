@@ -33,6 +33,7 @@ function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
       { id: "s1", name: "机场A", url: "https://a.example", active: true, nodeCount: 3, updatedAt: 1000 },
     ],
     testing: [],
+    autoUpdateHours: null,
     testAllRunning: false,
     message: "已连接内核",
     failedDelays: [],
@@ -263,6 +264,15 @@ describe("createSnapshotStore", () => {
     assert.equal(merged.view.nodes[2].name, "SG-New");
     assert.deepEqual(merged.testing, ["HK-1"]);
     assert.deepEqual(merged.failedDelays, ["US-1"]);
+    assert.equal(merged.autoUpdateHours, null, "未变化的自动更新间隔会透传");
+  });
+
+  it("carries auto update interval through reconcile and change detection", () => {
+    const prev = makeSnapshot({ autoUpdateHours: 6 });
+    const off = makeSnapshot({ autoUpdateHours: null });
+    assert.equal(hasAppStateChanged(prev, off), true, "自动更新间隔变化要算业务状态变化");
+    assert.equal(reconcileSnapshot(prev, off).autoUpdateHours, null);
+    assert.equal(reconcileSnapshot(prev, makeSnapshot({ autoUpdateHours: 6 })), prev);
   });
 
   it("supports re-entrant push inside coalescer onFlush", () => {

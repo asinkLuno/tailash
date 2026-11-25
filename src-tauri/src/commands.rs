@@ -40,6 +40,8 @@ pub enum Cmd {
     RemoveSub { id: String },
     /// 切换活动订阅
     SwitchSub { id: String },
+    /// 自动更新间隔（小时；null 或 0 = 关闭）
+    SetAutoUpdate { hours: Option<u64> },
 }
 
 impl From<Cmd> for UiCmd {
@@ -56,6 +58,7 @@ impl From<Cmd> for UiCmd {
             Cmd::AddSub { name, url } => Self::AddSub { name, url },
             Cmd::RemoveSub { id } => Self::RemoveSub { id },
             Cmd::SwitchSub { id } => Self::SwitchSub { id },
+            Cmd::SetAutoUpdate { hours } => Self::SetAutoUpdate { hours },
         }
     }
 }
