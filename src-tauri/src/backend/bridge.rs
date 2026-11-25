@@ -132,6 +132,7 @@ pub fn spawn_worker(
         let mut link = CoreLink::new(cfg.client());
         let delay_running = Arc::new(AtomicBool::new(false));
         let mut delay_cancel: Option<Arc<AtomicBool>> = None;
+        let mut gemini_cancel: Option<Arc<AtomicBool>> = None;
         // getcap 有子进程开销，只在启动时探测一次，之后仅 GrantCap 成功后翻回 false。
         // 找不到内核时不显示授权按钮；缺内核的提示在点「启动内核」时给出。
         let cap_missing = crate::backend::runtime::find_mihomo()
@@ -165,7 +166,7 @@ pub fn spawn_worker(
             snap.subs = sub_status_list(&settings);
             snap.auto_update_hours = settings.auto_update_hours;
         });
-        link.poll(&cfg, &snapshot, &mut delay_cancel);
+        link.poll(&cfg, &snapshot, &mut delay_cancel, &mut gemini_cancel);
         // 按当前订阅刷新 config.yaml，让接下来启动的内核用上最新订阅。
         if cfg.profile_path.is_file()
             && let Err(e) = crate::backend::runtime::write_config(&cfg)
@@ -180,7 +181,7 @@ pub fn spawn_worker(
             let cmd = match rx.recv_timeout(std::time::Duration::from_secs(1)) {
                 Ok(cmd) => cmd,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    link.poll(&cfg, &snapshot, &mut delay_cancel);
+                    link.poll(&cfg, &snapshot, &mut delay_cancel, &mut gemini_cancel);
                     // 自动更新：到期时把全部订阅排进队列，一次只跑一个下载（互斥见 updating_sub）
                     if auto_queue.is_empty()
                         && crate::backend::subscription::auto_update_due(
@@ -217,9 +218,8 @@ pub fn spawn_worker(
             };
             if matches!(cmd, UiCmd::Shutdown) {
                 link.stop_traffic();
-                if let Some(cancel) = delay_cancel.take() {
-                    cancel.store(true, Ordering::Relaxed);
-                }
+                cancel_flag(&mut delay_cancel);
+                cancel_flag(&mut gemini_cancel);
                 break;
             }
             let core = link.live();
@@ -246,7 +246,7 @@ pub fn spawn_worker(
                         }
                     }
                     // 启停是异步的，等下一轮 poll 反映真实状态。
-                    link.poll(&cfg, &snapshot, &mut delay_cancel);
+                    link.poll(&cfg, &snapshot, &mut delay_cancel, &mut gemini_cancel);
                 }
                 UiCmd::GrantCap => {
                     // pkexec 要等用户在授权窗里操作，放到线程里，别卡住 poll 与其它命令。
@@ -375,11 +375,16 @@ pub fn spawn_worker(
                                     Err(e) => committed = Err(e),
                                 }
                             }
+                            if view.is_some() {
+                                cancel_flag(&mut gemini_cancel);
+                            }
                             set_snap(&snapshot, |snap| {
                                 snap.subs = sub_status_list(&settings);
                                 if let Some(v) = view {
                                     snap.view = v;
                                     snap.failed_delays.clear();
+                                    snap.gemini.clear();
+                                    snap.gemini_running = false;
                                 }
                                 let prefix = if adding {
                                     "订阅已添加"
@@ -488,11 +493,16 @@ pub fn spawn_worker(
                             {
                                 eprintln!("保存订阅设置失败: {e}");
                             }
+                            if view.is_some() {
+                                cancel_flag(&mut gemini_cancel);
+                            }
                             set_snap(&snapshot, |snap| {
                                 snap.subs = sub_status_list(&settings);
                                 if let Some(v) = view {
                                     snap.view = v;
                                     snap.failed_delays.clear();
+                                    snap.gemini.clear();
+                                    snap.gemini_running = false;
                                 }
                                 snap.message = format!("已切换到「{name}」");
                             });
@@ -578,77 +588,149 @@ pub fn spawn_worker(
                     }
                 }
                 UiCmd::CheckGemini => {
-                    if core.is_none() {
-                        set_snap(&snapshot, |snap| snap.message = NOT_RUNNING.into());
-                        continue;
-                    }
-                    if snapshot.read().unwrap().gemini_running {
-                        set_snap(&snapshot, |snap| {
-                            snap.message = "Gemini 检测已在进行".into()
-                        });
-                        continue;
-                    }
-                    let config_path = cfg.config_path();
-                    let ports = crate::backend::gemini::listeners(&config_path);
-                    if ports.is_empty() {
-                        set_snap(&snapshot, |snap| {
-                            snap.message = "Gemini 检测不可用：请重启内核后重试".into()
-                        });
-                        continue;
-                    }
-                    // 配置里有入口但内核还跑在旧配置上（升级后 systemd 里的内核没重启）：
-                    // 直接让内核按磁盘上的 config.yaml 重载一次，listeners 这时才绑定。
-                    // 配置文本没变，不用 reload_core 那套 stage + 失败回滚。
-                    if !crate::backend::gemini::listening(ports[0].1)
-                        && !crate::backend::gemini::restart_listeners(
-                            core.as_ref(),
-                            &config_path,
-                            ports[0].1,
-                        )
-                    {
-                        set_snap(&snapshot, |snap| {
-                            snap.message = "Gemini 检测需要内核加载新配置：请重启内核后再试".into()
-                        });
-                        continue;
-                    }
-                    set_snap(&snapshot, |snap| {
-                        // 清空上一轮：删掉的节点不该留在表里，检测中也只显示本轮结果
-                        snap.gemini.clear();
-                        snap.gemini_running = true;
-                        snap.message = "正在检测 Gemini…".into();
-                    });
-                    launch_gemini_scan(snapshot.clone(), ports);
+                    handle_check_gemini(core.as_ref(), &cfg, &snapshot, &mut gemini_cancel);
                 }
             }
         }
     })
 }
 
+fn cancel_flag(slot: &mut Option<Arc<AtomicBool>>) {
+    if let Some(cancel) = slot.take() {
+        cancel.store(true, Ordering::Relaxed);
+    }
+}
+
 /// 同时探测的节点数：每个探测是一个最长 15s 的 curl，别一次性拉起几百个。
 const GEMINI_PROBES_AT_ONCE: usize = 6;
 
-/// 逐批探测每个节点的 Gemini 本地入口；结果按节点名写回快照。
-fn launch_gemini_scan(snapshot: SharedSnapshot, ports: Vec<(String, u16)>) {
+fn handle_check_gemini(
+    core: Option<&crate::backend::mihomo_api::MihomoClient>,
+    cfg: &crate::backend::runtime::RuntimeCfg,
+    snapshot: &SharedSnapshot,
+    gemini_cancel: &mut Option<Arc<AtomicBool>>,
+) {
+    let Some(client) = core else {
+        set_snap(snapshot, |snap| snap.message = NOT_RUNNING.into());
+        return;
+    };
+    if snapshot.read().unwrap().gemini_running {
+        set_snap(snapshot, |snap| snap.message = "Gemini 检测已在进行".into());
+        return;
+    }
+    let ports = crate::backend::gemini::listeners(&cfg.config_path());
+    if ports.is_empty() {
+        set_snap(snapshot, |snap| {
+            snap.message = "Gemini 检测不可用：请重启内核后重试".into()
+        });
+        return;
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    *gemini_cancel = Some(cancel.clone());
+    set_snap(snapshot, |snap| {
+        // 清空上一轮：删掉的节点不该留在表里，检测中也只显示本轮结果
+        snap.gemini.clear();
+        snap.gemini_running = true;
+        snap.message = "正在检测 Gemini…".into();
+    });
+    launch_gemini_scan(client.clone(), cfg.clone(), snapshot.clone(), ports, cancel);
+}
+
+/// 确认全部本地探测入口已在监听；若内核仍跑在旧配置上，按当前运行态 TUN 状态重新渲染
+/// config.yaml 再重载内核，避免把用户手动关闭的 TUN 悄悄重新打开。
+fn ensure_gemini_listeners(
+    client: &crate::backend::mihomo_api::MihomoClient,
+    cfg: &crate::backend::runtime::RuntimeCfg,
+    mut ports: Vec<(String, u16)>,
+    cancel: &AtomicBool,
+) -> Option<Vec<(String, u16)>> {
+    if crate::backend::gemini::all_listening(&ports) {
+        return Some(ports);
+    }
+    let config_path = cfg.config_path();
+    let live_tun = client
+        .configs()
+        .ok()
+        .and_then(|c| c.get("tun")?.get("enable")?.as_bool());
+    if let Some(tun) = live_tun
+        && let Ok(profile_text) = std::fs::read_to_string(&cfg.profile_path)
+        && let Ok(profile) = serde_yaml::from_str::<serde_yaml::Value>(&profile_text)
+        && let Ok(text) = crate::backend::runtime::render_config(cfg, &profile, Some(tun))
+    {
+        let staged = cfg.workdir.join(crate::backend::runtime::CONFIG_STAGED);
+        if std::fs::write(&staged, text).is_ok()
+            && crate::backend::subscription::atomic_replace(&staged, &config_path).is_ok()
+        {
+            ports = crate::backend::gemini::listeners(&config_path);
+        }
+    }
+    if ports.is_empty() || cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    crate::backend::gemini::restart_listeners(client, &config_path, &ports, cancel).then_some(ports)
+}
+
+/// 后台准备入口并按固定并发工作池探测每个节点的 Gemini 本地入口。
+fn launch_gemini_scan(
+    client: crate::backend::mihomo_api::MihomoClient,
+    cfg: crate::backend::runtime::RuntimeCfg,
+    snapshot: SharedSnapshot,
+    ports: Vec<(String, u16)>,
+    cancel: Arc<AtomicBool>,
+) {
     std::thread::spawn(move || {
-        let snapshot = &snapshot;
-        for chunk in ports.chunks(GEMINI_PROBES_AT_ONCE) {
-            std::thread::scope(|scope| {
-                for (name, port) in chunk {
-                    scope.spawn(move || {
-                        let ok = crate::backend::gemini::probe(*port);
-                        set_snap(snapshot, |snap| {
-                            snap.gemini.insert(name.clone(), ok);
-                        });
+        let Some(ports) = ensure_gemini_listeners(&client, &cfg, ports, &cancel) else {
+            if !cancel.load(Ordering::Relaxed) {
+                set_snap(&snapshot, |snap| {
+                    snap.gemini_running = false;
+                    snap.message = "Gemini 检测需要内核加载新配置：请重启内核后再试".into();
+                });
+            }
+            return;
+        };
+        run_gemini_probes(&snapshot, ports, &cancel, crate::backend::gemini::probe);
+    });
+}
+
+/// 用共享工作队列（worker pool）并发探测：慢/超时节点只占单个 worker，不拖慢整批。
+fn run_gemini_probes(
+    snapshot: &SharedSnapshot,
+    ports: Vec<(String, u16)>,
+    cancel: &AtomicBool,
+    probe: impl Fn(u16) -> bool + Send + Sync,
+) {
+    let queue = Mutex::new(VecDeque::from(ports));
+    let worker_count = GEMINI_PROBES_AT_ONCE.min(queue.lock().unwrap().len());
+    let probe = &probe;
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let queue = &queue;
+            scope.spawn(move || {
+                loop {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let Some((name, port)) = queue.lock().unwrap().pop_front() else {
+                        break;
+                    };
+                    let ok = probe(port);
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    set_snap(snapshot, |snap| {
+                        snap.gemini.insert(name, ok);
                     });
                 }
             });
         }
+    });
+    if !cancel.load(Ordering::Relaxed) {
         set_snap(snapshot, |snap| {
             snap.gemini_running = false;
             let available = snap.gemini.values().filter(|ok| **ok).count();
             snap.message = format!("Gemini 检测完成：{available} 个节点可用");
         });
-    });
+    }
 }
 
 fn delay_summary(succeeded: usize, failed: usize) -> String {
@@ -1061,15 +1143,15 @@ impl CoreLink {
         cfg: &crate::backend::runtime::RuntimeCfg,
         snapshot: &SharedSnapshot,
         delay_cancel: &mut Option<Arc<AtomicBool>>,
+        gemini_cancel: &mut Option<Arc<AtomicBool>>,
     ) {
         let config = match self.client.configs() {
             Ok(config) => config,
             Err(_) => {
                 if self.connected != Some(false) {
                     self.stop_traffic();
-                    if let Some(cancel) = delay_cancel.take() {
-                        cancel.store(true, Ordering::Relaxed);
-                    }
+                    cancel_flag(delay_cancel);
+                    cancel_flag(gemini_cancel);
                     let start = "点「启动内核」";
                     let message = if !cfg.profile_path.is_file() {
                         format!("{NOT_RUNNING}；请先更新订阅生成配置，再启动内核")
@@ -1175,6 +1257,8 @@ fn mark_core_stopped(snapshot: &SharedSnapshot, message: &str) {
         snap.testing.clear();
         snap.test_all_running = false;
         snap.failed_delays.clear();
+        snap.gemini.clear();
+        snap.gemini_running = false;
         snap.message = message.into();
     });
 }
@@ -1217,6 +1301,8 @@ mod tests {
             s.core_running = true;
             s.tun_enabled = true;
             s.test_all_running = true;
+            s.gemini_running = true;
+            s.gemini.insert("node".into(), true);
             s.view.nodes.push(crate::backend::proxy_view::NodeInfo {
                 name: "node".into(),
                 kind: "Vmess".into(),
@@ -1231,6 +1317,8 @@ mod tests {
         assert!(!snapshot.core_running);
         assert!(!snapshot.tun_enabled);
         assert!(!snapshot.test_all_running);
+        assert!(!snapshot.gemini_running);
+        assert!(snapshot.gemini.is_empty());
         assert!(snapshot.view.nodes.is_empty());
         assert!(snapshot.failed_delays.is_empty());
         assert_eq!(snapshot.message, "内核意外退出");
@@ -1465,6 +1553,45 @@ mod tests {
         );
         assert_eq!(snap.traffic.up_total, 9999);
         assert_eq!(snap.traffic.down_total, 88888);
+    }
+
+    #[test]
+    fn gemini_probes_worker_pool_records_results_and_summary() {
+        let snapshot = SharedSnapshot::default();
+        set_snap(&snapshot, |s| s.gemini_running = true);
+        let cancel = AtomicBool::new(false);
+        let ports = vec![
+            ("JP-1".into(), 17890),
+            ("HK-1".into(), 17891),
+            ("US-1".into(), 17892),
+        ];
+        run_gemini_probes(&snapshot, ports, &cancel, |port| port != 17891);
+        let snap = snapshot.read().unwrap();
+        assert!(!snap.gemini_running);
+        assert_eq!(snap.gemini.get("JP-1"), Some(&true));
+        assert_eq!(snap.gemini.get("HK-1"), Some(&false));
+        assert_eq!(snap.gemini.get("US-1"), Some(&true));
+        assert_eq!(snap.message, "Gemini 检测完成：2 个节点可用");
+    }
+
+    #[test]
+    fn gemini_probes_cancellation_stops_without_clobbering_snapshot() {
+        let snapshot = SharedSnapshot::default();
+        set_snap(&snapshot, |s| {
+            s.gemini_running = false;
+            s.message = "已切换到「新订阅」".into();
+        });
+        let cancel = AtomicBool::new(false);
+        let ports: Vec<(String, u16)> = (0..12)
+            .map(|i| (format!("N-{i}"), 17890 + i as u16))
+            .collect();
+        run_gemini_probes(&snapshot, ports, &cancel, |_| {
+            cancel.store(true, Ordering::Relaxed);
+            true
+        });
+        let snap = snapshot.read().unwrap();
+        assert!(snap.gemini.is_empty(), "取消后的探测结果不能污染快照");
+        assert_eq!(snap.message, "已切换到「新订阅」", "取消后不能覆盖状态消息");
     }
 }
 

@@ -72,25 +72,29 @@ pub fn all_listening(ports: &[(String, u16)]) -> bool {
     !ports.is_empty() && ports.iter().all(|(_, port)| listening(*port))
 }
 
-/// 让内核按当前 config.yaml 重载（listeners 这时才会绑定），最多等 2 秒确认入口在听。
+/// 让内核按当前 config.yaml 重载（listeners 这时才会绑定），最多等 2 秒确认全部入口在听。
 pub fn restart_listeners(
-    client: Option<&crate::backend::mihomo_api::MihomoClient>,
+    client: &crate::backend::mihomo_api::MihomoClient,
     config_path: &Path,
-    port: u16,
+    ports: &[(String, u16)],
+    cancel: &std::sync::atomic::AtomicBool,
 ) -> bool {
-    let Some(client) = client else {
-        return false;
-    };
     if client
         .reload(config_path.to_string_lossy().as_ref())
         .is_err()
     {
         return false;
     }
-    (0..20).any(|_| {
+    for _ in 0..20 {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
         std::thread::sleep(std::time::Duration::from_millis(100));
-        listening(port)
-    })
+        if !cancel.load(std::sync::atomic::Ordering::Relaxed) && all_listening(ports) {
+            return true;
+        }
+    }
+    false
 }
 
 /// 解析 `curl -w "\n%{http_code}"` 的标准输出并判定可用性。
