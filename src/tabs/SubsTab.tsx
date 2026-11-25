@@ -1,7 +1,25 @@
-//! Tab 2：订阅管理 —— 添加 / 更新 / 切换 / 删除。
+//! Tab 2：订阅管理 —— 添加 / 更新 / 切换 / 复制链接 / 删除。
 import { useState } from "react";
 import { sendCmd } from "../api";
 import type { Snapshot, SubStatus } from "../api";
+
+/** 复制到剪贴板：优先异步剪贴板 API，WebKitGTK 上不可用时退回 execCommand。 */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  }
+}
 
 function fmtTime(unixSec: number | null): string {
   if (!unixSec) return "从未更新";
@@ -13,6 +31,13 @@ export default function SubsTab({ snap }: { snap: Snapshot }) {
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [removing, setRemoving] = useState<SubStatus | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  async function copyUrl(sub: SubStatus) {
+    if (!(await copyText(sub.url))) return;
+    setCopiedId(sub.id);
+    window.setTimeout(() => setCopiedId((id) => (id === sub.id ? null : id)), 1500);
+  }
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -81,6 +106,12 @@ export default function SubsTab({ snap }: { snap: Snapshot }) {
                   onClick={() => sendCmd({ type: "updateSub", id: sub.id })}
                 >
                   更新
+                </button>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => void copyUrl(sub)}
+                >
+                  {copiedId === sub.id ? "已复制" : "复制链接"}
                 </button>
                 <button
                   className="btn btn-ghost btn-sm text-error"
