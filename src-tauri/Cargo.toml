@@ -1,7 +1,7 @@
 [package]
 name = "tailash"
 version = "0.1.2"
-description = "A Tauri App"
+description = "Linux 桌面端的 mihomo 代理客户端"
 authors = ["you"]
 edition = "2024"
 
