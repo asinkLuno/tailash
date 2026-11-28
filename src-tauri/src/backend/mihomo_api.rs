@@ -333,6 +333,17 @@ impl MihomoClient {
         Ok(())
     }
 
+    /// 清空内核的 Fake-IP 缓存（`POST /cache/fakeip/flush`）。
+    /// 切换/更新订阅后调用，避免旧订阅的 fake-ip-range 或 fake-ip-filter 残留影响分流。
+    pub fn flush_fakeip_cache(&self) -> Result<()> {
+        let (st, body) = self.request("POST", "/cache/fakeip/flush", None)?;
+        anyhow::ensure!(
+            st == 204 || st == 200,
+            "POST /cache/fakeip/flush -> {st} {body}"
+        );
+        Ok(())
+    }
+
     /// 订阅实时流量流（`GET /traffic`，mihomo 每秒推一帧 JSON）。
     /// 当 `cancel` 置为 true 或对端关闭连接时返回 `Ok(())`。
     pub fn stream_traffic(
@@ -676,6 +687,40 @@ mod tests {
                 down_total: 0,
             }]
         );
+    }
+
+    #[test]
+    fn flush_fakeip_cache_posts_to_mihomo_endpoint() {
+        let path = std::env::temp_dir().join(format!(
+            "tailash-flush-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap() > 0 && line != "\r\n" {
+                line.clear();
+            }
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
+            request_line
+        });
+
+        MihomoClient::new(path.to_string_lossy())
+            .flush_fakeip_cache()
+            .unwrap();
+        let request_line = server.join().unwrap();
+        let _ = std::fs::remove_file(path);
+        assert_eq!(request_line, "POST /cache/fakeip/flush HTTP/1.1\r\n");
     }
 }
 

@@ -1054,6 +1054,9 @@ fn reload_core(
         &cfg.config_path(),
         |path| client.reload(path.to_string_lossy().as_ref()),
     )?;
+    // 清理旧订阅在 cache.db 中残留的 Fake-IP 映射（例如不同订阅 fake-ip-range 或 fake-ip-filter 不同），
+    // 失败不阻断重载（部分订阅未开启 fake-ip 或旧内核可能不支持该接口）。
+    let _ = client.flush_fakeip_cache();
 
     // 用新 profile 的顺序（不是旧的 cfg.profile_path 缓存）
     let view = crate::backend::proxy_view::build(&profile, client.proxies()?);

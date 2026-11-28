@@ -25,3 +25,8 @@ dist-ssr
 
 # ZCode session state
 .zcode/
+
+# Packaging artifacts
+/pkg/
+/squashfs-root/
+*.pkg.tar.zst

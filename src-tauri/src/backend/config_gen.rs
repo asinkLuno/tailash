@@ -13,6 +13,10 @@ use serde_yaml::Value;
 pub const TAILSCALE_V4: &str = "100.64.0.0/10";
 /// Tailscale 的 IPv6 ULA 前缀
 pub const TAILSCALE_V6: &str = "fd7a:115c:a1e0::/48";
+/// 统一的 Fake-IP 网段（RFC 2544，与 mihomo 默认值及 TUN 198.18.0.1/30 对齐）。
+/// 不同订阅常自带冲突的网段（如 28.0.0.1/8 vs 198.18.0.1/16），共用同一 cache.db
+/// 切换订阅后旧缓存里的 IP 会落在当前 fake-ip-range 之外，导致 GeoIP(CN) 失效、国内域名误走代理。
+pub const FAKE_IP_RANGE: &str = "198.18.0.1/16";
 
 fn merge_tun(profile: &Value) -> Value {
     let mut tun = profile
@@ -73,7 +77,7 @@ pub fn generate(profile: &Value, socket_path: &str, tun_enabled: bool) -> Result
     cfg["tun"] = merge_tun(profile);
     cfg["tun"]["enable"] = Value::Bool(tun_enabled);
 
-    // ---- dns 段：保留订阅的配置，但 fake-ip-filter 追加 ts.net 相关 ----
+    // ---- dns 段：保留订阅的配置，统一 fake-ip-range，fake-ip-filter 追加 ts.net 相关 ----
     let ts_filters: Vec<Value> = ["+.ts.net", "+.tailscale.com"]
         .iter()
         .map(|s| Value::String(s.to_string()))
@@ -82,6 +86,13 @@ pub fn generate(profile: &Value, socket_path: &str, tun_enabled: bool) -> Result
         cfg["dns"] = Value::Mapping(serde_yaml::Mapping::new());
     }
     {
+        let uses_fake_ip = cfg["dns"]
+            .get("enhanced-mode")
+            .and_then(Value::as_str)
+            .is_some_and(|mode| mode.eq_ignore_ascii_case("fake-ip"));
+        if uses_fake_ip || cfg["dns"].get("fake-ip-range").is_some() {
+            cfg["dns"]["fake-ip-range"] = Value::String(FAKE_IP_RANGE.to_string());
+        }
         let filter = &mut cfg["dns"]["fake-ip-filter"];
         match filter {
             Value::Sequence(seq) => {
@@ -398,5 +409,35 @@ mod tests {
         assert_eq!(tun["auto-redirect"], true);
         assert_eq!(tun["route-exclude-address"].as_sequence().unwrap().len(), 3);
         assert_eq!(tun["dns-hijack"][0], "127.0.0.1:53");
+    }
+
+    #[test]
+    fn normalizes_fake_ip_range_across_subscriptions() {
+        let p = load_profile();
+        assert_eq!(p["dns"]["fake-ip-range"], "28.0.0.1/8");
+        let out = generate(&p, "/tmp/tailash-mihomo.sock", true).unwrap();
+        let cfg: Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            cfg["dns"]["fake-ip-range"], FAKE_IP_RANGE,
+            "不同订阅的 fake-ip-range 必须统一，避免共用 cache.db 串网段"
+        );
+
+        let implicit_range: Value =
+            serde_yaml::from_str("dns:\n  enable: true\n  enhanced-mode: fake-ip\nrules: []\n")
+                .unwrap();
+        let cfg: Value = serde_yaml::from_str(
+            &generate(&implicit_range, "/tmp/tailash-mihomo.sock", true).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(cfg["dns"]["fake-ip-range"], FAKE_IP_RANGE);
+
+        let redir_host: Value =
+            serde_yaml::from_str("dns:\n  enable: true\n  enhanced-mode: redir-host\nrules: []\n")
+                .unwrap();
+        let cfg: Value = serde_yaml::from_str(
+            &generate(&redir_host, "/tmp/tailash-mihomo.sock", true).unwrap(),
+        )
+        .unwrap();
+        assert!(cfg["dns"].get("fake-ip-range").is_none());
     }
 }
